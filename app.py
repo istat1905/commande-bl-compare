@@ -1,0 +1,94 @@
+import streamlit as st
+import pdfplumber
+import pandas as pd
+import io
+
+st.title("🧾 Comparateur Commande vs Bon de livraison")
+st.write("Déposez les deux PDF ci-dessous pour obtenir les différences.")
+
+# Uploads
+commande_file = st.file_uploader("📥 PDF Commande client", type=["pdf"])
+bl_file = st.file_uploader("📥 PDF Bon de livraison", type=["pdf"])
+
+def extraire_commande(pdf_bytes):
+    donnees = []
+    with pdfplumber.open(pdf_bytes) as pdf:
+        for page in pdf.pages:
+            texte = page.extract_text()
+            if not texte:
+                continue
+            lignes = texte.split("\n")
+            for ligne in lignes:
+                parts = ligne.split()
+                if len(parts) > 4 and parts[0].isdigit():
+                    try:
+                        ref = parts[1]
+                        qte = int(parts[-2])
+                        donnees.append({"ref": ref, "qte_commande": qte})
+                    except:
+                        continue
+    df = pd.DataFrame(donnees).drop_duplicates("ref")
+    return df
+
+def extraire_bl(pdf_bytes):
+    donnees = []
+    with pdfplumber.open(pdf_bytes) as pdf:
+        for page in pdf.pages:
+            texte = page.extract_text()
+            if not texte:
+                continue
+            lignes = texte.split("\n")
+            for ligne in lignes:
+                parts = ligne.split()
+                if len(parts) >= 6 and parts[0].isdigit():
+                    try:
+                        ref = parts[0]
+                        qte = float(parts[-2].replace(",", "."))
+                        donnees.append({"ref": ref, "qte_bl": qte})
+                    except:
+                        continue
+    df = pd.DataFrame(donnees).groupby("ref", as_index=False).sum()
+    return df
+
+def comparer(df_commande, df_bl):
+    df = pd.merge(df_commande, df_bl, on="ref", how="left")
+
+    manquants = df[df["qte_bl"].isna()]
+    diff = df[df["qte_bl"].notna() & (df["qte_commande"] != df["qte_bl"])]
+    ok = df[df["qte_commande"] == df["qte_bl"]]
+
+    return manquants, diff, ok
+
+if st.button("🔍 Comparer"):
+    if not commande_file or not bl_file:
+        st.error("Merci de télécharger les deux fichiers PDF.")
+    else:
+        df_commande = extraire_commande(commande_file)
+        df_bl = extraire_bl(bl_file)
+
+        manquants, diff, ok = comparer(df_commande, df_bl)
+
+        st.subheader("📌 Résultats :")
+
+        st.write(f"**❌ Références manquantes dans le BL : {len(manquants)}**")
+        st.dataframe(manquants)
+
+        st.write(f"**⚠️ Différences de quantité : {len(diff)}**")
+        st.dataframe(diff)
+
+        st.write(f"**✅ Correspondances exactes : {len(ok)}**")
+        st.dataframe(ok)
+
+        # Export Excel
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            manquants.to_excel(writer, sheet_name="Manquants", index=False)
+            diff.to_excel(writer, sheet_name="Quantite_diff", index=False)
+            ok.to_excel(writer, sheet_name="OK", index=False)
+
+        st.download_button(
+            label="📥 Télécharger le fichier Excel",
+            data=output.getvalue(),
+            file_name="Differences.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
