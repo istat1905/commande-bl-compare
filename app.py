@@ -2,15 +2,16 @@ import streamlit as st
 import pdfplumber
 import pandas as pd
 import io
+import re
 
 st.title("🧾 Comparateur Commande vs Bon de livraison")
 st.write("Déposez les deux PDF ci-dessous pour obtenir les différences.")
 
-# Uploads
+# Upload PDFs
 commande_file = st.file_uploader("📥 PDF Commande client", type=["pdf"])
 bl_file = st.file_uploader("📥 PDF Bon de livraison", type=["pdf"])
 
-# Extraction de la commande (Qté commandée détectée avant Pcb)
+# Extraction commande par code-barres
 def extraire_commande(pdf_bytes):
     donnees = []
     with pdfplumber.open(pdf_bytes) as pdf:
@@ -20,34 +21,21 @@ def extraire_commande(pdf_bytes):
                 continue
             lignes = texte.split("\n")
             for ligne in lignes:
-                parts = ligne.split()
-                if len(parts) < 2:
-                    continue
-                if not parts[0].isdigit():
-                    continue
-                ref = parts[1]
-                # Chercher Qté commandée avant "Pcb"
-                qte = None
-                for i, val in enumerate(parts):
-                    if val.lower() in ["pcb", "pcs"]:
-                        if i >= 1:
-                            try:
-                                qte = int(parts[i-1].replace(",", ""))
-                            except:
-                                pass
-                        break
-                if qte is None:
-                    try:
-                        qte = int(parts[5])
-                    except:
-                        continue
-                donnees.append({"ref": ref, "qte_commande": qte})
+                # Chercher un code-barres : 13 chiffres
+                match = re.search(r"\b(\d{13})\b", ligne)
+                if match:
+                    codebarre = match.group(1)
+                    # chercher la quantité juste avant la dernière valeur EUR
+                    qte_match = re.findall(r"\b\d+\b", ligne)
+                    if len(qte_match) >= 2:
+                        qte = int(qte_match[-2])
+                        donnees.append({"ref": codebarre, "qte_commande": qte})
     df = pd.DataFrame(donnees).drop_duplicates("ref")
     if df.empty:
         df = pd.DataFrame(columns=["ref", "qte_commande"])
     return df
 
-# Extraction du BL
+# Extraction BL par code-barres
 def extraire_bl(pdf_bytes):
     donnees = []
     with pdfplumber.open(pdf_bytes) as pdf:
@@ -57,23 +45,23 @@ def extraire_bl(pdf_bytes):
                 continue
             lignes = texte.split("\n")
             for ligne in lignes:
-                parts = ligne.split()
-                if len(parts) < 2:
-                    continue
-                if not parts[0].isdigit():
-                    continue
-                ref = parts[0]
-                try:
-                    qte = float(parts[-2].replace(",", "."))
-                except:
-                    continue
-                donnees.append({"ref": ref, "qte_bl": qte})
+                match = re.search(r"\b(\d{13})\b", ligne)
+                if match:
+                    codebarre = match.group(1)
+                    # quantité = le nombre juste avant le code-barres
+                    qte_match = re.findall(r"[\d,.]+", ligne)
+                    if len(qte_match) >= 2:
+                        try:
+                            qte = float(qte_match[-2].replace(",", "."))
+                            donnees.append({"ref": codebarre, "qte_bl": qte})
+                        except:
+                            continue
     df = pd.DataFrame(donnees).groupby("ref", as_index=False).sum()
     if df.empty:
         df = pd.DataFrame(columns=["ref", "qte_bl"])
     return df
 
-# Comparaison
+# Comparaison commande vs BL
 def comparer(df_commande, df_bl):
     df = pd.merge(df_commande, df_bl, on="ref", how="left")
     manquants = df[df["qte_bl"].isna()]
@@ -91,10 +79,12 @@ if st.button("🔍 Comparer"):
 
         if df_commande.empty or df_bl.empty:
             st.warning("⚠️ Aucun article trouvé dans un des PDFs. Vérifiez le format.")
-            # Pour debug, afficher le texte du PDF
+            # Afficher texte pour debug
+            st.subheader("📄 Texte brut Commande")
             with pdfplumber.open(commande_file) as pdf:
                 for page in pdf.pages:
                     st.text(page.extract_text())
+            st.subheader("📄 Texte brut BL")
             with pdfplumber.open(bl_file) as pdf:
                 for page in pdf.pages:
                     st.text(page.extract_text())
