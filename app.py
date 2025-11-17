@@ -10,6 +10,7 @@ st.write("Déposez les deux PDF ci-dessous pour obtenir les différences.")
 commande_file = st.file_uploader("📥 PDF Commande client", type=["pdf"])
 bl_file = st.file_uploader("📥 PDF Bon de livraison", type=["pdf"])
 
+# Extraction de la commande (6ème colonne = Qté commandée)
 def extraire_commande(pdf_bytes):
     donnees = []
     with pdfplumber.open(pdf_bytes) as pdf:
@@ -20,16 +21,17 @@ def extraire_commande(pdf_bytes):
             lignes = texte.split("\n")
             for ligne in lignes:
                 parts = ligne.split()
-                if len(parts) > 4 and parts[0].isdigit():
+                if len(parts) >= 7 and parts[0].isdigit():  # Au moins 7 colonnes
                     try:
-                        ref = parts[1]
-                        qte = int(parts[-2])
+                        ref = parts[1]          # Référence
+                        qte = int(parts[5])     # 6ème colonne = Qté commandée
                         donnees.append({"ref": ref, "qte_commande": qte})
                     except:
                         continue
     df = pd.DataFrame(donnees).drop_duplicates("ref")
     return df
 
+# Extraction du BL (1ère colonne = référence, quantité à la fin)
 def extraire_bl(pdf_bytes):
     donnees = []
     with pdfplumber.open(pdf_bytes) as pdf:
@@ -40,7 +42,7 @@ def extraire_bl(pdf_bytes):
             lignes = texte.split("\n")
             for ligne in lignes:
                 parts = ligne.split()
-                if len(parts) >= 6 and parts[0].isdigit():
+                if len(parts) >= 2 and parts[0].isdigit():
                     try:
                         ref = parts[0]
                         qte = float(parts[-2].replace(",", "."))
@@ -50,15 +52,15 @@ def extraire_bl(pdf_bytes):
     df = pd.DataFrame(donnees).groupby("ref", as_index=False).sum()
     return df
 
+# Comparaison commande vs BL
 def comparer(df_commande, df_bl):
     df = pd.merge(df_commande, df_bl, on="ref", how="left")
-
     manquants = df[df["qte_bl"].isna()]
     diff = df[df["qte_bl"].notna() & (df["qte_commande"] != df["qte_bl"])]
     ok = df[df["qte_commande"] == df["qte_bl"]]
-
     return manquants, diff, ok
 
+# Bouton Comparer
 if st.button("🔍 Comparer"):
     if not commande_file or not bl_file:
         st.error("Merci de télécharger les deux fichiers PDF.")
@@ -69,7 +71,6 @@ if st.button("🔍 Comparer"):
         manquants, diff, ok = comparer(df_commande, df_bl)
 
         st.subheader("📌 Résultats :")
-
         st.write(f"**❌ Références manquantes dans le BL : {len(manquants)}**")
         st.dataframe(manquants)
 
