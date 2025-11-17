@@ -2,7 +2,6 @@ import streamlit as st
 import pdfplumber
 import pandas as pd
 import io
-import re
 
 st.title("🧾 Comparateur Commande vs Bon de livraison")
 st.write("Déposez les deux PDF ci-dessous pour obtenir les différences.")
@@ -11,7 +10,7 @@ st.write("Déposez les deux PDF ci-dessous pour obtenir les différences.")
 commande_file = st.file_uploader("📥 PDF Commande client", type=["pdf"])
 bl_file = st.file_uploader("📥 PDF Bon de livraison", type=["pdf"])
 
-# Extraction de la commande
+# Extraction de la commande (Qté commandée détectée avant Pcb)
 def extraire_commande(pdf_bytes):
     donnees = []
     with pdfplumber.open(pdf_bytes) as pdf:
@@ -21,15 +20,13 @@ def extraire_commande(pdf_bytes):
                 continue
             lignes = texte.split("\n")
             for ligne in lignes:
-                # On cherche des lignes commençant par un numéro de ligne
                 parts = ligne.split()
                 if len(parts) < 2:
                     continue
                 if not parts[0].isdigit():
                     continue
                 ref = parts[1]
-                
-                # Chercher Qté commandée automatiquement avant "Pcb"
+                # Chercher Qté commandée avant "Pcb"
                 qte = None
                 for i, val in enumerate(parts):
                     if val.lower() in ["pcb", "pcs"]:
@@ -40,7 +37,6 @@ def extraire_commande(pdf_bytes):
                                 pass
                         break
                 if qte is None:
-                    # fallback sur 6ème colonne si regex échoue
                     try:
                         qte = int(parts[5])
                     except:
@@ -77,7 +73,7 @@ def extraire_bl(pdf_bytes):
         df = pd.DataFrame(columns=["ref", "qte_bl"])
     return df
 
-# Comparaison commande vs BL
+# Comparaison
 def comparer(df_commande, df_bl):
     df = pd.merge(df_commande, df_bl, on="ref", how="left")
     manquants = df[df["qte_bl"].isna()]
@@ -95,6 +91,13 @@ if st.button("🔍 Comparer"):
 
         if df_commande.empty or df_bl.empty:
             st.warning("⚠️ Aucun article trouvé dans un des PDFs. Vérifiez le format.")
+            # Pour debug, afficher le texte du PDF
+            with pdfplumber.open(commande_file) as pdf:
+                for page in pdf.pages:
+                    st.text(page.extract_text())
+            with pdfplumber.open(bl_file) as pdf:
+                for page in pdf.pages:
+                    st.text(page.extract_text())
         else:
             manquants, diff, ok = comparer(df_commande, df_bl)
 
