@@ -11,7 +11,7 @@ st.write("Déposez les deux PDF ci-dessous pour obtenir les différences.")
 commande_file = st.file_uploader("📥 PDF Commande client", type=["pdf"])
 bl_file = st.file_uploader("📥 PDF Bon de livraison", type=["pdf"])
 
-# Extraction commande par code-barres
+# Extraction commande avec code_article et code-barres
 def extraire_commande(pdf_bytes):
     donnees = []
     with pdfplumber.open(pdf_bytes) as pdf:
@@ -21,21 +21,32 @@ def extraire_commande(pdf_bytes):
                 continue
             lignes = texte.split("\n")
             for ligne in lignes:
-                # Chercher un code-barres : 13 chiffres
+                parts = ligne.split()
+                if len(parts) < 3:
+                    continue
+                if not parts[0].isdigit():
+                    continue
+                # Code article = deuxième colonne
+                code_article = parts[1]
+                # Code-barres = chercher 13 chiffres
                 match = re.search(r"\b(\d{13})\b", ligne)
                 if match:
                     codebarre = match.group(1)
-                    # chercher la quantité juste avant la dernière valeur EUR
+                    # Quantité = juste avant Pcb ou la 6ème colonne
                     qte_match = re.findall(r"\b\d+\b", ligne)
                     if len(qte_match) >= 2:
                         qte = int(qte_match[-2])
-                        donnees.append({"ref": codebarre, "qte_commande": qte})
+                        donnees.append({
+                            "code_article": code_article,
+                            "ref": codebarre,
+                            "qte_commande": qte
+                        })
     df = pd.DataFrame(donnees).drop_duplicates("ref")
     if df.empty:
-        df = pd.DataFrame(columns=["ref", "qte_commande"])
+        df = pd.DataFrame(columns=["code_article", "ref", "qte_commande"])
     return df
 
-# Extraction BL par code-barres
+# Extraction BL
 def extraire_bl(pdf_bytes):
     donnees = []
     with pdfplumber.open(pdf_bytes) as pdf:
@@ -101,7 +112,7 @@ if st.button("🔍 Comparer"):
             st.write(f"**✅ Correspondances exactes : {len(ok)}**")
             st.dataframe(ok)
 
-            # Export Excel
+            # Export Excel avec code_article
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
                 manquants.to_excel(writer, sheet_name="Manquants", index=False)
