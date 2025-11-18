@@ -22,10 +22,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Centrer l'image avec colonnes et fixer la largeur
-col1, col2, col3 = st.columns([1, 2, 1])
+# Trois colonnes égales
+col1, col2, col3 = st.columns(3)
 with col2:
-    st.image("Desathor.png", width=250)  # largeur fixe
+    st.image("Desathor.png", width=280)
 
 
 # Initialiser le session state
