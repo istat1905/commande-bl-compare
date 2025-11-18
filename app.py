@@ -17,13 +17,21 @@ except ImportError:
     st.warning("⚠️ Plotly non installé. Les graphiques ne seront pas affichés. Installez-le avec: `pip install plotly`")
 
 st.set_page_config(
+    st.set_page_config(
     page_title="DESATHOR",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Affichage de l'image
-st.image("Desathor.png", width=180)
+# Centrer l'image et augmenter sa taille
+st.markdown(
+    """
+    <div style='text-align: center;'>
+        <img src='Desathor.png' width='216'>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
 # Initialiser le session state
 if 'historique' not in st.session_state:
@@ -80,7 +88,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<h1 class="main-header">🧾 Comparateur Commande vs Bon de livraison</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">🧾 Comparateur pour DESADV</h1>', unsafe_allow_html=True)
 st.markdown('<p class="subtitle">Analysez vos commandes et bons de livraison en quelques clics</p>', unsafe_allow_html=True)
 
 # --------------------------
