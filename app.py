@@ -22,6 +22,16 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+st.markdown(
+    """
+    <div style="display: flex; justify-content: center;">
+        <img src="Desathor.png" width="216">
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+
 # Crée 3 colonnes, l'image au centre
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
