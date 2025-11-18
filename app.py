@@ -16,18 +16,16 @@ except ImportError:
     PLOTLY_AVAILABLE = False
     st.warning("⚠️ Plotly non installé. Les graphiques ne seront pas affichés. Installez-le avec: `pip install plotly`")
 
-# Config page
 st.set_page_config(
     page_title="DESATHOR",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Affichage de l'image centrée
-st.write("<div style='text-align: center;'>", unsafe_allow_html=True)
-st.image("Desathor.png", width=216)
-st.write("</div>", unsafe_allow_html=True)
-
+# Crée 3 colonnes, l'image au centre
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    st.image("Desathor.png", width=216)
 
 # Initialiser le session state
 if 'historique' not in st.session_state:
