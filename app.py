@@ -96,15 +96,24 @@ def extract_records_from_command_pdf(pdf_file):
                     # Extraction des autres informations
                     parts = ligne.split()
                     
-                    # Ref fournisseur (généralement après le numéro de ligne)
-                    ref_frn = None
-                    for part in parts:
-                        if re.match(r"^\d{2,6}$", part) and part != ean[:6]:
-                            ref_frn = part
+                    # Trouver la position de l'EAN dans la ligne
+                    ean_pos = None
+                    for idx, part in enumerate(parts):
+                        if ean in part:
+                            ean_pos = idx
                             break
                     
-                    # Code article (similaire à ref_frn dans votre cas)
-                    code_article = ref_frn if ref_frn else ""
+                    # Ref fournisseur : c'est le nombre AVANT l'EAN (pas le premier qui est la ligne)
+                    ref_frn = None
+                    code_article = ""
+                    
+                    if ean_pos and ean_pos > 1:
+                        # Le code article est juste avant l'EAN
+                        candidate = parts[ean_pos - 1]
+                        # Vérifier que c'est bien un code article (4-6 chiffres, pas un numéro de ligne 1-2 chiffres)
+                        if re.match(r"^\d{3,6}$", candidate):
+                            code_article = candidate
+                            ref_frn = candidate
                     
                     # Extraction de la quantité commandée
                     # Chercher "Conditionnement : X" suivi de la quantité
