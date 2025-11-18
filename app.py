@@ -9,75 +9,70 @@ from pathlib import Path
 
 st.set_page_config(page_title="Comparateur Commande vs BL", layout="wide")
 st.title("🧾 Comparateur Commande vs Bon de livraison — Multi (1 Excel, 1 onglet/commande)")
-st.write("Téléverse plusieurs PDF commandes et BL. L'outil va détecter les numéros de commande, matcher automatiquement et produire un Excel avec 1 onglet par commande.")
+st.write("Téléverse plusieurs PDF commandes et plusieurs PDF BL. L'outil va détecter les numéros de commande, matcher automatiquement et produire un Excel avec 1 onglet par commande.")
 
 # --------------------------
 # Helpers: détection n° commande
 # --------------------------
 def find_order_numbers_in_text(text):
+    """
+    Retourne les numéros de commande détectés.
+    On ne prend que les nombres associés à 'commande' ou 'Bon de Livraison'.
+    """
     if not text:
         return []
-    patterns = [
-        r"Commande\s*n[°º]?\s*[:\s-]*?(\d{5,10})",
-        r"N[°º]?\s*commande\s*[:\s-]*?(\d{5,10})",
-        r"Bon\s+de\s+Livraison\s+Nr\.?\s*[:\s-]*?(\d{5,10})",
-        r"N[°º]?\s*[:\s-]*?commande[:\s-]*?(\d{5,10})",
-        r"\b(\d{6,10})\b"
-    ]
-    found = []
-    for pat in patterns:
-        for m in re.finditer(pat, text, flags=re.IGNORECASE):
-            num = m.group(1)
-            if num and num not in found:
-                found.append(num)
-    return found
+
+    order_nums = set()
+    for line in text.splitlines():
+        line_lower = line.lower()
+        # ne détecte que si "commande" ou "bon de livraison" dans la ligne
+        if "commande" in line_lower or "bon de livraison" in line_lower:
+            m = re.search(r"\b(\d{5,10})\b", line)
+            if m:
+                order_nums.add(m.group(1))
+    return list(order_nums)
 
 # --------------------------
 # Extraction functions
 # --------------------------
 def extract_records_from_command_pdf(pdf_file):
-    orders = []
-    full_text = ""
+    orders = defaultdict(list)
     try:
         with pdfplumber.open(pdf_file) as pdf:
+            full_text = ""
             for page in pdf.pages:
                 txt = page.extract_text() or ""
                 full_text += "\n" + txt
-                for ligne in txt.split("\n"):
-                    if not ligne.strip():
-                        continue
-                    # EAN 13 pour ref
-                    ean_match = re.search(r"\b(\d{13})\b", ligne)
-                    ref = ean_match.group(1) if ean_match else None
-
-                    # code_article : deuxième colonne si première colonne numérique (Réf frn)
+                lines = txt.split("\n")
+                for ligne in lines:
                     parts = ligne.split()
-                    code_article = None
-                    if parts and re.match(r"^\d+$", parts[0]) and len(parts) > 1:
-                        candidate = parts[1]
-                        if re.match(r"^\d{1,6}$", candidate):
-                            code_article = candidate
-
-                    # qte_commande : avant-dernier nombre de la ligne
-                    qte = None
-                    if ref and parts:
-                        nums = [int(n) for n in re.findall(r"\b\d+\b", ligne)]
-                        if len(nums) >= 2:
-                            qte = nums[-2]
-                        elif nums:
-                            qte = nums[-1]
-
-                    if ref and code_article and qte is not None:
-                        orders.append({
+                    if not parts:
+                        continue
+                    # récupérer "réf frn" et code_article
+                    reffrn = parts[0] if re.match(r"^\d+$", parts[0]) else None
+                    code_article = parts[1] if len(parts) > 1 else ""
+                    # quantité: avant-dernier nombre si possible
+                    nums = re.findall(r"\b\d+\b", ligne)
+                    qte = int(nums[-2]) if len(nums) >= 2 else int(nums[-1]) if nums else None
+                    # ref = EAN si trouvé sinon reffrn
+                    ean_match = re.search(r"\b(\d{13})\b", ligne)
+                    if ean_match:
+                        ref = ean_match.group(1)
+                    elif reffrn:
+                        ref = reffrn
+                    else:
+                        ref = None
+                    if ref and qte is not None:
+                        orders["__ALL__"].append({
                             "ref": ref,
                             "code_article": code_article,
-                            "qte_commande": qte
+                            "qte_commande": int(qte)
                         })
-        order_nums = find_order_numbers_in_text(full_text)
+            order_nums = find_order_numbers_in_text(full_text)
     except Exception as e:
         st.error(f"Erreur lecture PDF commande: {e}")
-        return {"records": [], "full_text": "", "order_numbers": []}
-    return {"records": orders, "full_text": full_text, "order_numbers": order_nums}
+        return {}
+    return {"records": orders.get("__ALL__", []), "full_text": full_text, "order_numbers": order_nums}
 
 def extract_records_from_bl_pdf(pdf_file):
     records = []
@@ -87,37 +82,56 @@ def extract_records_from_bl_pdf(pdf_file):
             for page in pdf.pages:
                 txt = page.extract_text() or ""
                 full_text += "\n" + txt
-                for ligne in txt.split("\n"):
-                    if not ligne.strip():
-                        continue
+                lines = txt.split("\n")
+                for ligne in lines:
+                    ean = None
                     m = re.search(r"\b(\d{13})\b", ligne)
-                    ean = m.group(1) if m else None
-                    if not ean:
-                        continue
-                    # quantité avant le EAN ou avant-dernier nombre
-                    nums = [n for n in re.findall(r"[\d,.]+", ligne)]
+                    if m:
+                        ean = m.group(1)
+                    nums = re.findall(r"[\d,.]+", ligne)
                     qte = None
                     if nums:
-                        nums_clean = [n for n in nums if ean not in re.sub(r"[,.]", "", n)]
-                        if nums_clean:
+                        if m and len(nums) >= 2:
+                            nums_clean = [n for n in nums if re.sub(r"[,.]", "", n) not in (m.group(1) if m else "")]
+                            if nums_clean:
+                                candidate = nums_clean[-1]
+                                try:
+                                    qte = float(candidate.replace(",", "."))
+                                except:
+                                    qte = None
+                        elif len(nums) >= 2:
                             try:
-                                qte = float(nums_clean[-1].replace(",", "."))
+                                qte = float(nums[-2].replace(",", "."))
+                            except:
+                                qte = None
+                        else:
+                            try:
+                                qte = float(nums[-1].replace(",", "."))
                             except:
                                 qte = None
                     if ean and qte is not None:
                         records.append({"ref": ean, "qte_bl": qte})
-        order_nums = find_order_numbers_in_text(full_text)
     except Exception as e:
         st.error(f"Erreur lecture PDF BL: {e}")
-        return {"records": [], "full_text": "", "order_numbers": []}
+        return {}
+    order_nums = find_order_numbers_in_text(full_text)
     return {"records": records, "full_text": full_text, "order_numbers": order_nums}
 
 # --------------------------
 # UI: Upload multiple files
 # --------------------------
-commande_files = st.file_uploader("📥 PDF(s) Commande client", type=["pdf"], accept_multiple_files=True)
-bl_files = st.file_uploader("📥 PDF(s) Bon de livraison", type=["pdf"], accept_multiple_files=True)
+st.markdown("### 1) Téléverse les fichiers")
+commande_files = st.file_uploader("📥 PDF(s) Commande client (plusieurs possibles)", type=["pdf"], accept_multiple_files=True)
+bl_files = st.file_uploader("📥 PDF(s) Bon de livraison (plusieurs possibles)", type=["pdf"], accept_multiple_files=True)
 
+# Options
+st.markdown("### Options")
+opt_auto_assign_missing = st.checkbox("Afficher BL ou commande manquante (alerte si un fichier sans match)", value=True)
+st.markdown("---")
+
+# --------------------------
+# Traitement et matching
+# --------------------------
 if st.button("🔍 Lancer la comparaison"):
     if not commande_files:
         st.error("📁 Aucune commande uploadée.")
@@ -126,22 +140,24 @@ if st.button("🔍 Lancer la comparaison"):
         st.error("📁 Aucun BL uploadé.")
         st.stop()
 
-    # --- Extraire toutes les commandes ---
     commandes_dict = {}
+    commandes_texts = {}
     fallback_counter = 0
     for f in commande_files:
         res = extract_records_from_command_pdf(f)
         recs = res.get("records", [])
+        txt = res.get("full_text", "")
         order_nums = res.get("order_numbers", [])
         if not order_nums:
             fallback_counter += 1
-            order_nums = [f"NO_CMD_{Path(f.name).stem}_{fallback_counter}"]
+            generated = f"NO_CMD_{Path(f.name).stem}_{fallback_counter}"
+            order_nums = [generated]
         for on in order_nums:
             if on not in commandes_dict:
                 commandes_dict[on] = []
+                commandes_texts[on] = txt
             commandes_dict[on].extend(recs)
 
-    # Agréger par ref/code_article
     for on, recs in list(commandes_dict.items()):
         if recs:
             df = pd.DataFrame(recs)
@@ -150,13 +166,14 @@ if st.button("🔍 Lancer la comparaison"):
             df = pd.DataFrame(columns=["ref", "code_article", "qte_commande"])
         commandes_dict[on] = df
 
-    # --- Extraire tous les BL ---
     bls_dict = {}
+    bl_texts = {}
     fallback_counter = 0
     bl_records_no_order = []
     for f in bl_files:
         res = extract_records_from_bl_pdf(f)
         recs = res.get("records", [])
+        txt = res.get("full_text", "")
         order_nums = res.get("order_numbers", [])
         if not order_nums:
             fallback_counter += 1
@@ -166,9 +183,9 @@ if st.button("🔍 Lancer la comparaison"):
         for on in order_nums:
             if on not in bls_dict:
                 bls_dict[on] = []
+                bl_texts[on] = txt
             bls_dict[on].extend(recs)
 
-    # Agréger BL par ref
     for on, recs in list(bls_dict.items()):
         if recs:
             df = pd.DataFrame(recs)
@@ -178,20 +195,16 @@ if st.button("🔍 Lancer la comparaison"):
         bls_dict[on] = df
 
     # -------------------------
-    # Matching
-    # -------------------------
     results_per_order = {}
     unmatched_commands = []
     unmatched_bls = set(bls_dict.keys())
 
     for order_num, df_cmd in commandes_dict.items():
         df_bl = bls_dict.get(order_num, pd.DataFrame(columns=["ref", "qte_bl"]))
-        if order_num in bls_dict:
-            unmatched_bls.discard(order_num)
-
+        unmatched_bls.discard(order_num)
         merged = pd.merge(df_cmd, df_bl, on="ref", how="left")
-        merged["qte_commande"] = pd.to_numeric(merged["qte_commande"], errors="coerce").fillna(0).astype(float)
-        merged["qte_bl"] = pd.to_numeric(merged["qte_bl"], errors="coerce").fillna(float("nan"))
+        merged["qte_commande"] = pd.to_numeric(merged.get("qte_commande", 0), errors="coerce").fillna(0).astype(float)
+        merged["qte_bl"] = pd.to_numeric(merged.get("qte_bl", float("nan")), errors="coerce")
 
         def status_row(r):
             if pd.isna(r["qte_bl"]):
@@ -205,7 +218,6 @@ if st.button("🔍 Lancer la comparaison"):
                 return "QTY_DIFF"
 
         merged["status"] = merged.apply(status_row, axis=1)
-
         n_missing = (merged["status"] == "MISSING_IN_BL").sum()
         n_qtydiff = (merged["status"] == "QTY_DIFF").sum()
         n_ok = (merged["status"] == "OK").sum()
@@ -217,14 +229,11 @@ if st.button("🔍 Lancer la comparaison"):
             "n_ok": int(n_ok),
             "bl_exists": not df_bl.empty
         }
-
         if df_bl.empty:
             unmatched_commands.append(order_num)
 
     bls_without_matching_command = [k for k in bls_dict.keys() if k not in commandes_dict.keys()]
 
-    # -------------------------
-    # Affichage
     # -------------------------
     st.subheader("📊 Résumé")
     st.write(f"- Commandes détectées : **{len(commandes_dict)}**")
@@ -250,14 +259,19 @@ if st.button("🔍 Lancer la comparaison"):
             st.write(f"**BL trouvé :** {'Oui' if info['bl_exists'] else 'Non'}")
             st.dataframe(merged[["ref", "code_article", "qte_commande", "qte_bl", "status"]].sort_values(by="status"))
 
-    # -------------------------
-    # Générer Excel
+    if bls_without_matching_command:
+        st.markdown("---")
+        st.subheader("📦 BL sans commande (aperçu)")
+        for ob in bls_without_matching_command:
+            df = bls_dict.get(ob, pd.DataFrame(columns=["ref", "qte_bl"]))
+            st.write(f"- BL id: **{ob}** — lignes: {len(df)}")
+            st.dataframe(df)
+
     # -------------------------
     output = io.BytesIO()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"Differences_all_commands_{timestamp}.xlsx"
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        # Summary
         summary_rows = []
         for order_num, info in results_per_order.items():
             summary_rows.append({
@@ -268,14 +282,16 @@ if st.button("🔍 Lancer la comparaison"):
                 "n_missing": info["n_missing"]
             })
         pd.DataFrame(summary_rows).to_excel(writer, sheet_name="Summary", index=False)
-
-        # Sheet par commande
         for order_num, info in results_per_order.items():
-            merged = info["merged"][["ref", "code_article", "qte_commande", "qte_bl", "status"]]
+            merged = info["merged"].copy()
             sheet_name = f"C_{order_num}"[:31]
+            cols = ["ref", "code_article", "qte_commande", "qte_bl", "status"]
+            for c in cols:
+                if c not in merged.columns:
+                    merged[c] = ""
+            merged = merged[cols]
             merged.to_excel(writer, sheet_name=sheet_name, index=False)
 
-        # BL sans commande
         if bls_without_matching_command:
             all_unmatched = []
             for ob in bls_without_matching_command:
@@ -285,7 +301,8 @@ if st.button("🔍 Lancer la comparaison"):
                     df2["bl_id"] = ob
                     all_unmatched.append(df2)
             if all_unmatched:
-                pd.concat(all_unmatched, ignore_index=True).to_excel(writer, sheet_name="BL_without_cmd", index=False)
+                df_unmatched_bls = pd.concat(all_unmatched, ignore_index=True)
+                df_unmatched_bls.to_excel(writer, sheet_name="BL_without_cmd", index=False)
 
     st.success("✅ Comparaison terminée — Télécharge le fichier Excel ci-dessous")
     st.download_button(
@@ -296,4 +313,4 @@ if st.button("🔍 Lancer la comparaison"):
     )
 
     st.markdown("---")
-    st.write("Astuce : seules les lignes avec EAN 13 et code_article (4-6 chiffres) sont prises en compte pour éviter de confondre adresses ou autres nombres.")
+    st.write("Astuce : si certaines références n'apparaissent pas, vérifie que les PDFs contiennent bien les EAN 13 ou des 'Réf' numériques ; l'outil privilégie l'EAN (13 chiffres) pour faire le matching.")
