@@ -153,6 +153,7 @@ def extract_records_from_bl_pdf(pdf_file):
     """Extrait les articles du BL avec détection de zone"""
     records = []
     full_text = ""
+    debug_lines = []  # Pour debug
     try:
         with pdfplumber.open(pdf_file) as pdf:
             current_order = None
@@ -163,6 +164,9 @@ def extract_records_from_bl_pdf(pdf_file):
                 full_text += "\n" + txt
                 
                 for ligne in txt.split("\n"):
+                    # DEBUG: capturer les 30 premières lignes
+                    if len(debug_lines) < 30:
+                        debug_lines.append(ligne)
                     # Mise à jour de la zone
                     in_product_zone = is_in_product_zone_bl(ligne, in_product_zone)
                     
@@ -221,10 +225,10 @@ def extract_records_from_bl_pdf(pdf_file):
                     
     except Exception as e:
         st.error(f"Erreur lecture PDF BL: {e}")
-        return {"records": [], "order_numbers": [], "full_text": ""}
+        return {"records": [], "order_numbers": [], "full_text": "", "debug_lines": []}
     
     order_numbers = find_order_numbers_in_text(full_text)
-    return {"records": records, "order_numbers": order_numbers, "full_text": full_text}
+    return {"records": records, "order_numbers": order_numbers, "full_text": full_text, "debug_lines": debug_lines}
 
 # --------------------------
 # Upload
@@ -258,8 +262,10 @@ if st.button("🔍 Lancer la comparaison"):
 
     # Extraction des BL
     bls_dict = defaultdict(list)
+    debug_info = {}  # Pour stocker les infos de debug
     for f in bl_files:
         res = extract_records_from_bl_pdf(f)
+        debug_info[f.name] = res.get("debug_lines", [])
         for rec in res["records"]:
             bls_dict[rec["order_num"]].append(rec)
     
@@ -289,7 +295,7 @@ if st.button("🔍 Lancer la comparaison"):
     # --------------------------
     # Interface moderne: tabs et expander
     # --------------------------
-    tabs = st.tabs(["Résumé", "Détails commandes", "BL sans commandes"])
+    tabs = st.tabs(["Résumé", "Détails commandes", "BL sans commandes", "🔍 DEBUG"])
     
     with tabs[0]:
         st.subheader("📊 Résumé")
@@ -325,6 +331,14 @@ if st.button("🔍 Lancer la comparaison"):
             df = bls_dict[bl_id]
             st.write(f"- BL id: {bl_id} — lignes: {len(df)}")
             st.dataframe(df)
+    
+    with tabs[3]:
+        st.subheader("🔍 DEBUG - Texte brut extrait des BL")
+        st.write("Les 30 premières lignes extraites de chaque BL:")
+        for filename, lines in debug_info.items():
+            st.write(f"**Fichier: {filename}**")
+            for i, line in enumerate(lines):
+                st.text(f"{i+1}: {repr(line)}")
 
     # --------------------------
     # Export Excel
