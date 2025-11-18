@@ -16,18 +16,18 @@ except ImportError:
     PLOTLY_AVAILABLE = False
     st.warning("⚠️ Plotly non installé. Les graphiques ne seront pas affichés. Installez-le avec: `pip install plotly`")
 
+# 1️⃣ Configurer la page
 st.set_page_config(
-    st.set_page_config(
     page_title="DESATHOR",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Centrer l'image et augmenter sa taille
+# 2️⃣ Afficher l'image centrée et responsive
 st.markdown(
     """
     <div style='text-align: center;'>
-        <img src='Desathor.png' width='216'>
+        <img src='Desathor.png' style='width: 20%; max-width: 300px; height: auto;'>
     </div>
     """,
     unsafe_allow_html=True
