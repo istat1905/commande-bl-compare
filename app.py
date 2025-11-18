@@ -16,16 +16,30 @@ except ImportError:
     PLOTLY_AVAILABLE = False
     st.warning("⚠️ Plotly non installé. Les graphiques ne seront pas affichés. Installez-le avec: `pip install plotly`")
 
+import base64
+
 st.set_page_config(
     page_title="DESATHOR",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Trois colonnes égales
-col1, col2, col3 = st.columns(3)
-with col2:
-    st.image("Desathor.png", width=280)
+# Convertir l'image en base64 (pour HTML)
+with open("Desathor.png", "rb") as f:
+    data = f.read()
+encoded = base64.b64encode(data).decode()
+
+st.markdown(
+    f"""
+    <div style="display: flex; flex-direction: column; align-items: center; margin-top: 40px;">
+        <img src="data:image/png;base64,{encoded}" style="width:300px; max-width:80%; height:auto;">
+        <div style="margin-top: 20px; font-size: 18px; color: #888;">
+            Ma signature ici
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
 
 # Initialiser le session state
