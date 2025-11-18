@@ -297,7 +297,7 @@ with st.sidebar:
     st.header("⚙️ Options")
     
     hide_unmatched = st.checkbox(
-        "Masquer les commandes non matchés dans l'Excel",
+        "👁️‍🗨️ Masquer les commandes sans correspondance",
         value=True,
         help="Exclut les articles MISSING_IN_BL de l'export Excel"
     )
