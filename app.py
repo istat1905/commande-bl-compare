@@ -17,11 +17,13 @@ except ImportError:
     st.warning("⚠️ Plotly non installé. Les graphiques ne seront pas affichés. Installez-le avec: `pip install plotly`")
 
 st.set_page_config(
-    page_title="Comparateur Commande vs BL",
+    page_title="DESATHOR",
     layout="wide",
     initial_sidebar_state="expanded"
-    st.image("Desathor.png", width=180)
 )
+
+# Affichage de l'image
+st.image("Desathor.png", width=180)
 
 # Initialiser le session state
 if 'historique' not in st.session_state:
