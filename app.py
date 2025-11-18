@@ -252,7 +252,7 @@ with st.sidebar:
     st.header("📁 Fichiers")
     
     # Bouton Nouveau comparatif -> utilise clés dynamiques pour reset safe
-    if st.button("🔄 Nouveau comparatif", use_container_width=True, type="primary"):
+    if st.button("🔄 Nouveau", use_container_width=True, type="primary"):
         st.session_state.key_cmd = f"cmd_{time.time()}"
         st.session_state.key_bl = f"bl_{time.time()}"
         st.session_state.historique = []
@@ -278,7 +278,7 @@ with st.sidebar:
     st.header("⚙️ Options")
     
     hide_unmatched = st.checkbox(
-        "Masquer les articles non matchés dans l'Excel",
+        "Masquer les commandes non matchés dans l'Excel",
         value=True,
         help="Exclut les articles MISSING_IN_BL de l'export Excel"
     )
@@ -715,3 +715,10 @@ if st.session_state.historique:
 
 else:
     st.info("👆 Téléversez vos fichiers et lancez la comparaison pour commencer")
+
+    st.markdown("""
+    <div style='text-align: center; margin-top: 40px; font-size: 18px; color: #888;'>
+        ⭐⭐⭐⭐⭐<br> <strong>Powered by IC - 2025</strong>
+    </div>
+    """, unsafe_allow_html=True)
+
