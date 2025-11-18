@@ -190,21 +190,25 @@ def extract_records_from_bl_pdf(pdf_file):
                     
                     ean = ean_match.group(1)
                     
-                    # Extraire la quantité (généralement avant l'EAN)
+                    # Extraire la quantité (3ème nombre avant l'EAN)
+                    # Structure BL: Ref | Designation | Origine | Colis | Contenu | Quantité | EAN
                     nums = re.findall(r'[\d,.]+', ligne)
                     qte = None
                     
                     if nums:
-                        # Prendre l'avant-dernier nombre (le dernier étant l'EAN)
-                        for i in range(len(nums)-1, -1, -1):
-                            candidate = nums[i]
-                            if candidate == ean:
-                                continue
-                            try:
-                                qte = float(candidate.replace(",", "."))
+                        # Trouver l'index de l'EAN
+                        ean_idx = -1
+                        for i, num in enumerate(nums):
+                            if num == ean:
+                                ean_idx = i
                                 break
+                        
+                        # La quantité est 3 positions avant l'EAN (après Colis et Contenu)
+                        if ean_idx >= 3:
+                            try:
+                                qte = float(nums[ean_idx - 1].replace(",", "."))
                             except:
-                                continue
+                                pass
                     
                     if qte is None:
                         continue
