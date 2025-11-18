@@ -25,7 +25,7 @@ st.set_page_config(
 # Crée 3 colonnes, l'image au centre
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    st.image("Desathor.png", width=216)
+    st.image("Desathor.png", width=300)
 
 # Initialiser le session state
 if 'historique' not in st.session_state:
