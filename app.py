@@ -20,6 +20,7 @@ st.set_page_config(
     page_title="Comparateur Commande vs BL",
     layout="wide",
     initial_sidebar_state="expanded"
+    st.image("Desathor.png", width=180)
 )
 
 # Initialiser le session state
