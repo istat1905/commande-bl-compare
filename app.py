@@ -5,8 +5,15 @@ import io
 import re
 from collections import defaultdict
 from datetime import datetime
-import plotly.express as px
-import plotly.graph_objects as go
+
+# Vérifier si plotly est disponible
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+    st.warning("⚠️ Plotly non installé. Les graphiques ne seront pas affichés. Installez-le avec: `pip install plotly`")
 
 st.set_page_config(
     page_title="Comparateur Commande vs BL",
@@ -413,47 +420,61 @@ if st.session_state.historique:
     # Graphiques
     col1, col2 = st.columns(2)
     
-    with col1:
-        # Répartition des statuts
-        status_data = pd.DataFrame({
-            'Statut': ['✅ OK', '⚠️ Différence', '❌ Manquant'],
-            'Nombre': [total_articles_ok, total_articles_diff, total_articles_missing]
-        })
-        
-        fig_status = px.pie(
-            status_data, 
-            values='Nombre', 
-            names='Statut',
-            title='Répartition des articles',
-            color_discrete_sequence=['#38ef7d', '#f5576c', '#ff6b6b']
-        )
-        fig_status.update_traces(textposition='inside', textinfo='percent+label')
-        st.plotly_chart(fig_status, use_container_width=True)
-    
-    with col2:
-        # Taux de service par commande
-        service_rates = []
-        for order_num, df in results.items():
-            total_cmd = df["qte_commande"].sum()
-            total_bl = df["qte_bl"].sum()
-            rate = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
-            service_rates.append({
-                'Commande': order_num,
-                'Taux de service': rate
+    if PLOTLY_AVAILABLE:
+        with col1:
+            # Répartition des statuts
+            status_data = pd.DataFrame({
+                'Statut': ['✅ OK', '⚠️ Différence', '❌ Manquant'],
+                'Nombre': [total_articles_ok, total_articles_diff, total_articles_missing]
             })
+            
+            fig_status = px.pie(
+                status_data, 
+                values='Nombre', 
+                names='Statut',
+                title='Répartition des articles',
+                color_discrete_sequence=['#38ef7d', '#f5576c', '#ff6b6b']
+            )
+            fig_status.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig_status, use_container_width=True)
         
-        df_service = pd.DataFrame(service_rates)
-        fig_service = px.bar(
-            df_service,
-            x='Commande',
-            y='Taux de service',
-            title='Taux de service par commande',
-            color='Taux de service',
-            color_continuous_scale=['#ff6b6b', '#ffd93d', '#38ef7d'],
-            range_color=[0, 100]
-        )
-        fig_service.update_layout(showlegend=False)
-        st.plotly_chart(fig_service, use_container_width=True)
+        with col2:
+            # Taux de service par commande
+            service_rates = []
+            for order_num, df in results.items():
+                total_cmd = df["qte_commande"].sum()
+                total_bl = df["qte_bl"].sum()
+                rate = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
+                service_rates.append({
+                    'Commande': order_num,
+                    'Taux de service': rate
+                })
+            
+            df_service = pd.DataFrame(service_rates)
+            fig_service = px.bar(
+                df_service,
+                x='Commande',
+                y='Taux de service',
+                title='Taux de service par commande',
+                color='Taux de service',
+                color_continuous_scale=['#ff6b6b', '#ffd93d', '#38ef7d'],
+                range_color=[0, 100]
+            )
+            fig_service.update_layout(showlegend=False)
+            st.plotly_chart(fig_service, use_container_width=True)
+    else:
+        # Version sans graphiques
+        with col1:
+            st.metric("Articles OK", total_articles_ok)
+            st.metric("Articles avec différence", total_articles_diff)
+            st.metric("Articles manquants", total_articles_missing)
+        
+        with col2:
+            for order_num, df in results.items():
+                total_cmd = df["qte_commande"].sum()
+                total_bl = df["qte_bl"].sum()
+                rate = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
+                st.metric(f"Commande {order_num}", f"{rate:.1f}%")
     
     # Tabs
     tabs = st.tabs(["📋 Détails commandes", "📈 Statistiques", "🏆 Top produits"])
@@ -518,17 +539,20 @@ if st.session_state.historique:
             # Top des codes articles manquants
             top_missing = df_missing.groupby("Code article")["Qté commandée"].sum().sort_values(ascending=False).head(10)
             
-            fig_missing = px.bar(
-                x=top_missing.values,
-                y=top_missing.index.astype(str),
-                orientation='h',
-                title='Top 10 des codes articles manquants',
-                labels={'x': 'Quantité totale', 'y': 'Code article'},
-                color=top_missing.values,
-                color_continuous_scale='Reds'
-            )
-            fig_missing.update_layout(showlegend=False)
-            st.plotly_chart(fig_missing, use_container_width=True)
+            if PLOTLY_AVAILABLE:
+                fig_missing = px.bar(
+                    x=top_missing.values,
+                    y=top_missing.index.astype(str),
+                    orientation='h',
+                    title='Top 10 des codes articles manquants',
+                    labels={'x': 'Quantité totale', 'y': 'Code article'},
+                    color=top_missing.values,
+                    color_continuous_scale='Reds'
+                )
+                fig_missing.update_layout(showlegend=False)
+                st.plotly_chart(fig_missing, use_container_width=True)
+            else:
+                st.bar_chart(top_missing)
             
             st.dataframe(df_missing, use_container_width=True)
         else:
