@@ -94,43 +94,48 @@ def extract_records_from_command_pdf(pdf_file):
                     # Ignorer les lignes d'adresse/métadonnées
                     if is_address_or_metadata_line(ligne):
                         continue
-                    
+
+                    # Chercher les numéros de commande dans la ligne
                     order_nums = find_order_numbers_in_text(ligne)
                     if order_nums:
                         current_order = order_nums[0]
 
+                    # Chercher l'EAN 13 chiffres
                     ean_match = re.search(r"\b(\d{13})\b", ligne)
                     if not ean_match:
                         continue
-                    
+
+                    # Exclure les lignes dont la première "réf fournisseur" commence par 30201
+                    parts = ligne.split()
+                    if parts and re.match(r"^\d{2,10}$", parts[0]) and parts[0].startswith("30201"):
+                        continue  # Ignorer cette ligne
+
                     ean = ean_match.group(1)
-                    
+
                     # Vérifier si c'est un GLN ou code postal
                     if is_likely_gln_or_postal(ligne, ean):
                         continue
-                    
-                    parts = ligne.split()
-                    ref_frn = parts[0] if parts and re.match(r"^\d{2,10}$", parts[0]) and not parts[0].startswith("30201") else None
-                    code_article = parts[1] if len(parts) > 1 else ""
-                    ref = ean
-                    
+
+                    # Extraire quantité
                     nums = re.findall(r"\b\d+\b", ligne)
                     if len(nums) < 2:
                         continue
-                    
+
                     qte = int(nums[-2]) if len(nums) >= 2 else int(nums[-1])
 
                     records.append({
-                        "ref": ref,
-                        "code_article": code_article,
+                        "ref": ean,
+                        "code_article": parts[1] if len(parts) > 1 else "",
                         "qte_commande": qte,
                         "order_num": current_order if current_order else "__NO_ORDER__"
                     })
     except Exception as e:
         st.error(f"Erreur lecture PDF commande: {e}")
         return {"records": [], "order_numbers": [], "full_text": ""}
+
     order_numbers = find_order_numbers_in_text(full_text)
     return {"records": records, "order_numbers": order_numbers, "full_text": full_text}
+
 
 def extract_records_from_bl_pdf(pdf_file):
     records = []
