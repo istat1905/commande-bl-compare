@@ -157,16 +157,29 @@ def extract_records_from_command_pdf(pdf_file):
                             code_article = candidate
                             ref_frn = candidate
                     
-                    qty_match = re.search(r"Conditionnement\s*:\s*\d+\s+\d+(\d+)\s+(\d+)", ligne)
+                    # Extraction quantité : méthode simple mais plus robuste que l'ancienne ligne
+                    qty_match = re.search(r"(?:Qt[eé]e|Quantité|Qty|Qte)\s*[:\-]?\s*(\d{1,6}(?:[.,]\d+)?)", ligne, flags=re.IGNORECASE)
                     if qty_match:
-                        qte = int(qty_match.group(1))
+                        qte_raw = qty_match.group(1).replace(",", ".")
+                        try:
+                            qte = int(float(qte_raw))
+                        except:
+                            qte = None
                     else:
-                        nums = re.findall(r"\b(\d+)\b", ligne)
-                        nums = [int(n) for n in nums if n != ean and len(n) < 6]
+                        # fallback : dernier nombre (hors EAN) de la ligne
+                        nums = re.findall(r"\b(\d{1,6}(?:[.,]\d+)?)\b", ligne)
+                        nums = [n for n in nums if not re.fullmatch(r"\d{13}", n)]
                         if nums:
-                            qte = nums[-2] if len(nums) >= 2 else nums[-1]
+                            cand = nums[-1].replace(",", ".")
+                            try:
+                                qte = int(float(cand))
+                            except:
+                                qte = None
                         else:
-                            continue
+                            qte = None
+
+                    if qte is None:
+                        continue
                     
                     records.append({
                         "ref": ean,
@@ -238,6 +251,19 @@ def calculate_service_rate(qte_cmd, qte_bl):
         return 0
     return min((qte_bl / qte_cmd) * 100, 100)
 
+def safe_sheet_name(prefix, order_num, existing_names):
+    """Génère un nom de feuille Excel sûr et unique (max 31 chars)"""
+    base = f"{prefix}_{str(order_num)}"
+    base = re.sub(r"[:\\/?*\[\]]", "_", base)[:25]
+    name = base
+    i = 1
+    while name in existing_names:
+        suffix = f"_{i}"
+        name = (base[:31 - len(suffix)]) + suffix
+        i += 1
+    existing_names.add(name)
+    return name
+
 # --------------------------
 # Sidebar
 # --------------------------
@@ -246,8 +272,11 @@ with st.sidebar:
     
     # Bouton Nouveau comparatif
     if st.button("🔄 Nouveau comparatif", use_container_width=True, type="primary"):
-        st.session_state.commande_files = None
-        st.session_state.bl_files = None
+        # reset file_uploader keys et historique
+        for k in ["commande_uploader", "bl_uploader"]:
+            if k in st.session_state:
+                st.session_state[k] = None
+        st.session_state.historique = []
         st.rerun()
     
     st.markdown("---")
@@ -270,9 +299,9 @@ with st.sidebar:
     st.header("⚙️ Options")
     
     hide_unmatched = st.checkbox(
-        "Masquer les articles non matchés dans l'Excel",
+        "Masquer les **commandes** sans BL (ne pas afficher ni exporter les commandes entièrement non livrées)",
         value=True,
-        help="Exclut les articles MISSING_IN_BL de l'export Excel"
+        help="Si coché : on exclut les commandes dont la somme des quantités livrées est zéro."
     )
     
     st.markdown("---")
@@ -306,9 +335,12 @@ if st.button("🔍 Lancer la comparaison", use_container_width=True, type="prima
             for rec in res["records"]:
                 commandes_dict[rec["order_num"]].append(rec)
         
-        for k in commandes_dict.keys():
+        for k in list(commandes_dict.keys()):
             df = pd.DataFrame(commandes_dict[k])
-            df = df.groupby(["ref", "code_article"], as_index=False).agg({"qte_commande": "sum"})
+            if not df.empty:
+                df = df.groupby(["ref", "code_article"], as_index=False).agg({"qte_commande": "sum"})
+            else:
+                df = pd.DataFrame(columns=["ref", "code_article", "qte_commande"])
             commandes_dict[k] = df
 
         # Extraction des BL
@@ -321,9 +353,12 @@ if st.button("🔍 Lancer la comparaison", use_container_width=True, type="prima
             for rec in res["records"]:
                 bls_dict[rec["order_num"]].append(rec)
         
-        for k in bls_dict.keys():
+        for k in list(bls_dict.keys()):
             df = pd.DataFrame(bls_dict[k])
-            df = df.groupby("ref", as_index=False).agg({"qte_bl": "sum"})
+            if not df.empty:
+                df = df.groupby("ref", as_index=False).agg({"qte_bl": "sum"})
+            else:
+                df = pd.DataFrame(columns=["ref", "qte_bl"])
             bls_dict[k] = df
 
         # Matching et statuts
@@ -333,9 +368,15 @@ if st.button("🔍 Lancer la comparaison", use_container_width=True, type="prima
             merged = pd.merge(df_cmd, df_bl, on="ref", how="left")
             
             merged["qte_commande"] = pd.to_numeric(merged["qte_commande"], errors="coerce").fillna(0)
-            merged["qte_bl"] = pd.to_numeric(merged.get("qte_bl", pd.Series()), errors="coerce").fillna(0)
+            # safe handling qte_bl
+            if "qte_bl" in merged.columns:
+                merged["qte_bl"] = pd.to_numeric(merged["qte_bl"], errors="coerce").fillna(0)
+            else:
+                merged["qte_bl"] = 0
             
             def status_row(r):
+                if r["qte_commande"] == 0:
+                    return "NO_QTY_ORDER"
                 if r["qte_bl"] == 0:
                     return "MISSING_IN_BL"
                 return "OK" if r["qte_commande"] == r["qte_bl"] else "QTY_DIFF"
@@ -368,15 +409,27 @@ if st.session_state.historique:
     bls_dict = latest["bls_dict"]
     hide_unmatched = latest["hide_unmatched"]
     
-    # Calculer les KPIs globaux
-    total_commande = sum([df["qte_commande"].sum() for df in results.values()])
-    total_livre = sum([df["qte_bl"].sum() for df in results.values()])
+    # Si hide_unmatched True, on exclut les commandes dont total qte_bl == 0
+    def included_orders(results_dict):
+        included = {}
+        for order_num, df in results_dict.items():
+            total_bl = df["qte_bl"].sum() if "qte_bl" in df.columns else 0
+            if hide_unmatched and total_bl == 0:
+                continue
+            included[order_num] = df
+        return included
+
+    filtered_results = included_orders(results)
+
+    # Calculer les KPIs globaux sur filtered_results
+    total_commande = sum([df["qte_commande"].sum() for df in filtered_results.values()])
+    total_livre = sum([df["qte_bl"].sum() for df in filtered_results.values()])
     total_manquant = total_commande - total_livre
     taux_service_global = (total_livre / total_commande * 100) if total_commande > 0 else 0
     
-    total_articles_ok = sum([(df["status"] == "OK").sum() for df in results.values()])
-    total_articles_diff = sum([(df["status"] == "QTY_DIFF").sum() for df in results.values()])
-    total_articles_missing = sum([(df["status"] == "MISSING_IN_BL").sum() for df in results.values()])
+    total_articles_ok = sum([(df["status"] == "OK").sum() for df in filtered_results.values()])
+    total_articles_diff = sum([(df["status"] == "QTY_DIFF").sum() for df in filtered_results.values()])
+    total_articles_missing = sum([(df["status"] == "MISSING_IN_BL").sum() for df in filtered_results.values()])
     
     # KPIs en haut
     st.markdown("### 📊 Vue d'ensemble")
@@ -422,7 +475,7 @@ if st.session_state.historique:
     
     if PLOTLY_AVAILABLE:
         with col1:
-            # Répartition des statuts
+            # Répartition des statuts (sur filtered_results)
             status_data = pd.DataFrame({
                 'Statut': ['✅ OK', '⚠️ Différence', '❌ Manquant'],
                 'Nombre': [total_articles_ok, total_articles_diff, total_articles_missing]
@@ -441,7 +494,7 @@ if st.session_state.historique:
         with col2:
             # Taux de service par commande
             service_rates = []
-            for order_num, df in results.items():
+            for order_num, df in filtered_results.items():
                 total_cmd = df["qte_commande"].sum()
                 total_bl = df["qte_bl"].sum()
                 rate = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
@@ -451,17 +504,20 @@ if st.session_state.historique:
                 })
             
             df_service = pd.DataFrame(service_rates)
-            fig_service = px.bar(
-                df_service,
-                x='Commande',
-                y='Taux de service',
-                title='Taux de service par commande',
-                color='Taux de service',
-                color_continuous_scale=['#ff6b6b', '#ffd93d', '#38ef7d'],
-                range_color=[0, 100]
-            )
-            fig_service.update_layout(showlegend=False)
-            st.plotly_chart(fig_service, use_container_width=True)
+            if not df_service.empty:
+                fig_service = px.bar(
+                    df_service,
+                    x='Commande',
+                    y='Taux de service',
+                    title='Taux de service par commande',
+                    color='Taux de service',
+                    color_continuous_scale=['#ff6b6b', '#ffd93d', '#38ef7d'],
+                    range_color=[0, 100]
+                )
+                fig_service.update_layout(showlegend=False)
+                st.plotly_chart(fig_service, use_container_width=True)
+            else:
+                st.info("Aucune commande à afficher (filtrage actif ou pas de données).")
     else:
         # Version sans graphiques
         with col1:
@@ -470,7 +526,7 @@ if st.session_state.historique:
             st.metric("Articles manquants", total_articles_missing)
         
         with col2:
-            for order_num, df in results.items():
+            for order_num, df in filtered_results.items():
                 total_cmd = df["qte_commande"].sum()
                 total_bl = df["qte_bl"].sum()
                 rate = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
@@ -483,6 +539,11 @@ if st.session_state.historique:
         st.markdown("### 🔎 Détails par commande")
         
         for order_num, df in results.items():
+            # Appliquer le filtre hide_unmatched : si activé et total BL == 0 -> ne pas afficher
+            total_bl = df["qte_bl"].sum() if "qte_bl" in df.columns else 0
+            if hide_unmatched and total_bl == 0:
+                continue  # skip entire commande
+            
             n_ok = (df["status"] == "OK").sum()
             n_diff = (df["status"] == "QTY_DIFF").sum()
             n_miss = (df["status"] == "MISSING_IN_BL").sum()
@@ -521,9 +582,12 @@ if st.session_state.historique:
     with tabs[1]:
         st.markdown("### 📈 Articles manquants par code article")
         
-        # Créer un DataFrame des articles manquants
+        # Créer un DataFrame des articles manquants (en respectant le filtre)
         missing_articles = []
         for order_num, df in results.items():
+            total_bl = df["qte_bl"].sum() if "qte_bl" in df.columns else 0
+            if hide_unmatched and total_bl == 0:
+                continue
             missing = df[df["status"] == "MISSING_IN_BL"]
             for _, row in missing.iterrows():
                 missing_articles.append({
@@ -561,9 +625,12 @@ if st.session_state.historique:
     with tabs[2]:
         st.markdown("### 🏆 Classement des produits")
         
-        # Top commandés
+        # Top commandés (en respectant filtre)
         all_products = []
         for order_num, df in results.items():
+            total_bl = df["qte_bl"].sum() if "qte_bl" in df.columns else 0
+            if hide_unmatched and total_bl == 0:
+                continue
             for _, row in df.iterrows():
                 all_products.append({
                     "Code article": row["code_article"],
@@ -572,19 +639,25 @@ if st.session_state.historique:
                     "Qté livrée": int(row["qte_bl"])
                 })
         
-        df_products = pd.DataFrame(all_products)
+        df_products = pd.DataFrame(all_products) if all_products else pd.DataFrame(columns=["Code article", "EAN", "Qté commandée", "Qté livrée"])
         
         col1, col2 = st.columns(2)
         
         with col1:
             st.markdown("#### 📦 Top 10 commandés")
-            top_cmd = df_products.groupby("Code article")["Qté commandée"].sum().sort_values(ascending=False).head(10)
-            st.dataframe(top_cmd.reset_index(), use_container_width=True)
+            if not df_products.empty:
+                top_cmd = df_products.groupby("Code article")["Qté commandée"].sum().sort_values(ascending=False).head(10)
+                st.dataframe(top_cmd.reset_index(), use_container_width=True)
+            else:
+                st.info("Aucun produit à afficher.")
         
         with col2:
             st.markdown("#### 📋 Top 10 livrés")
-            top_livre = df_products.groupby("Code article")["Qté livrée"].sum().sort_values(ascending=False).head(10)
-            st.dataframe(top_livre.reset_index(), use_container_width=True)
+            if not df_products.empty:
+                top_livre = df_products.groupby("Code article")["Qté livrée"].sum().sort_values(ascending=False).head(10)
+                st.dataframe(top_livre.reset_index(), use_container_width=True)
+            else:
+                st.info("Aucun produit à afficher.")
     
     # Export Excel
     st.markdown("---")
@@ -595,15 +668,19 @@ if st.session_state.historique:
     filename = f"Comparaison_{timestamp}.xlsx"
     
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        # Écrire chaque commande
+        existing_sheets = set()
+        # Écrire chaque commande (en respectant hide_unmatched)
         for order_num, df in results.items():
-            # Filtrer si nécessaire
-            if hide_unmatched:
-                df_export = df[df["status"] != "MISSING_IN_BL"].copy()
-            else:
-                df_export = df.copy()
+            total_bl = df["qte_bl"].sum() if "qte_bl" in df.columns else 0
+            if hide_unmatched and total_bl == 0:
+                continue  # skip whole commande for export
             
-            sheet_name = f"C_{order_num}"[:31]
+            # Filtrer si nécessaire (toujours conserver toutes les lignes de la commande, 
+            # mais garder la logique précédente si tu souhaites exclure seulement les lignes MISSING_IN_BL)
+            # Ici on garde les lignes complètes ; si tu veux aussi exclure les lignes MISSING_IN_BL, adapte ci-dessous.
+            df_export = df.copy()
+            
+            sheet_name = safe_sheet_name("C", order_num, existing_sheets)
             df_export.to_excel(writer, sheet_name=sheet_name, index=False)
             
             # Formatage
@@ -616,14 +693,14 @@ if st.session_state.historique:
             
             for idx, row in df_export.iterrows():
                 excel_row = idx + 1
-                if row['status'] == 'OK':
+                if row.get('status') == 'OK':
                     worksheet.set_row(excel_row, None, ok_format)
-                elif row['status'] == 'QTY_DIFF':
+                elif row.get('status') == 'QTY_DIFF':
                     worksheet.set_row(excel_row, None, diff_format)
-                elif row['status'] == 'MISSING_IN_BL':
+                elif row.get('status') == 'MISSING_IN_BL':
                     worksheet.set_row(excel_row, None, miss_format)
         
-        # Ajouter une feuille récapitulative
+        # Ajouter une feuille récapitulative (sur les mêmes commandes exportées)
         summary_data = {
             'Commande': [],
             'Taux de service (%)': [],
@@ -636,6 +713,9 @@ if st.session_state.historique:
         }
         
         for order_num, df in results.items():
+            total_bl = df["qte_bl"].sum() if "qte_bl" in df.columns else 0
+            if hide_unmatched and total_bl == 0:
+                continue
             total_cmd = df["qte_commande"].sum()
             total_bl = df["qte_bl"].sum()
             taux = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
