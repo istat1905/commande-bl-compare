@@ -110,7 +110,7 @@ def extract_records_from_command_pdf(pdf_file):
                         continue
                     
                     parts = ligne.split()
-                    ref_frn = parts[0] if parts and re.match(r"^\d{2,10}$", parts[0]) else None
+                    ref_frn = parts[0] if parts and re.match(r"^\d{2,10}$", parts[0]) and not parts[0].startswith("30201") else None
                     code_article = parts[1] if len(parts) > 1 else ""
                     ref = ean
                     
