@@ -716,9 +716,12 @@ if st.session_state.historique:
 else:
     st.info("👆 Téléversez vos fichiers et lancez la comparaison pour commencer")
 
-    st.markdown("""
-    <div style='text-align: center; margin-top: 40px; font-size: 18px; color: #888;'>
-        ⭐⭐⭐⭐⭐<br> <strong>Powered by IC - 2025</strong>
-    </div>
-    """, unsafe_allow_html=True)
+    # --- Signature 5 étoiles ---
+st.markdown("""
+<div style='text-align: center; margin-top: 40px; font-size: 18px; color: #888;'>
+    ⭐⭐⭐⭐⭐<br>
+    <strong>Powered by IC - 2025</strong>
+</div>
+""", unsafe_allow_html=True)
+
 
