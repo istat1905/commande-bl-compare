@@ -35,8 +35,7 @@ st.markdown(
         <img src="data:image/png;base64,{encoded}" style="width:300px; max-width:80%; height:auto;">
         <div style="margin-top: 20px; font-size: 18px; color: #888;">
            
-        </div>
-    </div>
+        
     """,
     unsafe_allow_html=True
 )
