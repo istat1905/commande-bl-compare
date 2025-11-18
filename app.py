@@ -22,9 +22,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-col1, col2, col3 = st.columns([1, 2, 1])
-with col2:
-    st.image("Desathor.png", use_column_width=True)
+st.markdown(
+    """
+    <div style="display: flex; justify-content: center;">
+        <img src="Desathor.png" style="width: 50%; max-width: 300px; height: auto;">
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
 
 # Initialiser le session state
