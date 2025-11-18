@@ -34,7 +34,7 @@ st.markdown(
     <div style="display: flex; flex-direction: column; align-items: center; margin-top: 40px;">
         <img src="data:image/png;base64,{encoded}" style="width:300px; max-width:80%; height:auto;">
         <div style="margin-top: 20px; font-size: 18px; color: #888;">
-            Ma signature ici
+           
         </div>
     </div>
     """,
