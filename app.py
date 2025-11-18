@@ -16,20 +16,17 @@ except ImportError:
     PLOTLY_AVAILABLE = False
     st.warning("⚠️ Plotly non installé. Les graphiques ne seront pas affichés. Installez-le avec: `pip install plotly`")
 
+# Configuration de la page
 st.set_page_config(
     page_title="DESATHOR",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-st.markdown(
-    """
-    <div style="display: flex; justify-content: center;">
-        <img src="Desathor.png" width="216">
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+# Centrer l'image avec des colonnes et rendre responsive
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    st.image("Desathor.png", use_column_width=True)  # s'adapte à la largeur de la colonne
 
 
 # Crée 3 colonnes, l'image au centre
