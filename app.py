@@ -34,7 +34,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Load logo safely (non-blocking)
+# Try to load logo safely
 logo_path = "Desathor.png"
 if os.path.exists(logo_path):
     try:
@@ -118,7 +118,6 @@ def is_valid_ean13(code):
     s = re.sub(r"\D", "", str(code))
     if len(s) != 13:
         return False
-    # checksum
     digits = [int(c) for c in s]
     checksum = digits[-1]
     evens = sum(digits[-2::-2])
@@ -133,22 +132,19 @@ def extract_records_from_command_pdf(pdf_file):
     try:
         with pdfplumber.open(pdf_file) as pdf:
             current_order = None
-            in_data_section = False
             for page in pdf.pages:
                 txt = page.extract_text() or ""
                 full_text += "\n" + txt
-                lines = txt.split("\n")
-                for ligne in lines:
+                for ligne in txt.split("\n"):
                     order_nums = find_order_numbers_in_text(ligne)
                     if order_nums:
                         current_order = order_nums[0]
-                    # simple heuristic: lines with EAN and qty
                     ean_matches = re.findall(r"\b(\d{13})\b", ligne)
                     valid_eans = [ean for ean in ean_matches if is_valid_ean13(ean)]
                     if not valid_eans:
                         continue
                     ean = valid_eans[0]
-                    # try to find qty labels
+                    # quantity heuristics
                     qte = None
                     m = re.search(r"(?:Qt[eé]e|QTE|Qty|Quantit[eé])\s*[:\-]?\s*([0-9]+(?:[.,][0-9]+)?)", ligne, flags=re.IGNORECASE)
                     if m:
@@ -367,18 +363,20 @@ if launch_button:
         results = {}
         for order_num, df_cmd in commandes_dict.items():
             df_bl = bls_dict.get(order_num, pd.DataFrame(columns=["ref", "qte_bl"]))
-           merged = pd.merge(df_cmd, df_bl, on="ref", how="left")
+            merged = pd.merge(df_cmd, df_bl, on="ref", how="left")
+            if "qte_commande" not in merged.columns:
+                merged["qte_commande"] = 0
             merged["qte_commande"] = pd.to_numeric(merged["qte_commande"], errors="coerce").fillna(0)
-            merged["qte_bl"] = pd.to_numeric(merged.get("qte_bl", pd.Series()), errors="coerce").fillna(0)
-        def status_row(r):
-        if r["qte_bl"] == 0:
-        return "MISSING_IN_BL"
-        return "OK" if r["qte_commande"] == r["qte_bl"] else "QTY_DIFF"
-        merged["status"] = merged.apply(status_row, axis=1)
-        merged["diff"] = merged["qte_bl"] - merged["qte_commande"]
-        merged["taux_service"] = merged.apply(
-    lambda r: calculate_service_rate(r["qte_commande"], r["qte_bl"]), axis=1
-)
+            if "qte_bl" not in merged.columns:
+                merged["qte_bl"] = 0
+            merged["qte_bl"] = pd.to_numeric(merged["qte_bl"], errors="coerce").fillna(0)
+            def status_row(r):
+                if r["qte_bl"] == 0:
+                    return "MISSING_IN_BL"
+                return "OK" if r["qte_commande"] == r["qte_bl"] else "QTY_DIFF"
+            merged["status"] = merged.apply(status_row, axis=1)
+            merged["diff"] = merged["qte_bl"] - merged["qte_commande"]
+            merged["taux_service"] = merged.apply(lambda r: calculate_service_rate(r["qte_commande"], r["qte_bl"]), axis=1)
             results[order_num] = merged
 
         comparison_data = {
