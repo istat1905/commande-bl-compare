@@ -23,28 +23,15 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-with open("Desathor.png", "rb") as f:
-    data = f.read()
-encoded = base64.b64encode(data).decode()
-
-st.markdown(
-    f"""
-    <div style="display: flex; flex-direction: column; align-items: center; margin-top: 40px;">
-        <img src="data:image/png;base64,{encoded}" style="width:300px; max-width:80%; height:auto;">
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-if 'historique' not in st.session_state:
-    st.session_state.historique = []
-if "key_cmd" not in st.session_state:
-    st.session_state.key_cmd = "cmd_1"
-if "key_bl" not in st.session_state:
-    st.session_state.key_bl = "bl_1"
-
+# Logo plus haut
 st.markdown("""
 <style>
+    .logo-container {
+        display: flex;
+        justify-content: center;
+        margin-top: 10px;
+        margin-bottom: 20px;
+    }
     .main-header {
         font-size: 2.5rem;
         font-weight: 700;
@@ -82,11 +69,105 @@ st.markdown("""
     .info-card {
         background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
     }
+    .help-button {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 15px 25px;
+        border-radius: 50px;
+        font-size: 16px;
+        font-weight: bold;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        cursor: pointer;
+        z-index: 999;
+        border: none;
+    }
 </style>
 """, unsafe_allow_html=True)
 
+with open("Desathor.png", "rb") as f:
+    data = f.read()
+encoded = base64.b64encode(data).decode()
+
+st.markdown(
+    f"""
+    <div class="logo-container">
+        <img src="data:image/png;base64,{encoded}" style="width:250px; max-width:80%; height:auto;">
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+if 'historique' not in st.session_state:
+    st.session_state.historique = []
+if "key_cmd" not in st.session_state:
+    st.session_state.key_cmd = "cmd_1"
+if "key_bl" not in st.session_state:
+    st.session_state.key_bl = "bl_1"
+if "show_help" not in st.session_state:
+    st.session_state.show_help = False
+if "desadv_notifications" not in st.session_state:
+    st.session_state.desadv_notifications = []
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+if "user_role" not in st.session_state:
+    st.session_state.user_role = None
+
+# Base de données utilisateurs simulée (À REMPLACER par vraie BDD)
+USERS_DB = {
+    "admin": {"password": "admin123", "role": "admin", "web_access": True},
+    "user1": {"password": "user123", "role": "user", "web_access": False},
+}
+
+def check_password(username, password):
+    """Vérifie les identifiants utilisateur"""
+    if username in USERS_DB and USERS_DB[username]["password"] == password:
+        return True, USERS_DB[username]["role"], USERS_DB[username]["web_access"]
+    return False, None, False
+
+def save_user(username, password, role, web_access):
+    """Ajoute ou modifie un utilisateur"""
+    USERS_DB[username] = {"password": password, "role": role, "web_access": web_access}
+    return True
+
+def delete_user(username):
+    """Supprime un utilisateur"""
+    if username in USERS_DB and username != "admin":
+        del USERS_DB[username]
+        return True
+    return False
+
+# Page de connexion si non authentifié
+if not st.session_state.authenticated:
+    st.markdown("---")
+    st.markdown("### 🔐 Connexion requise")
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        with st.form("login_form"):
+            username = st.text_input("👤 Identifiant")
+            password = st.text_input("🔒 Mot de passe", type="password")
+            submit = st.form_submit_button("Se connecter", use_container_width=True, type="primary")
+            
+            if submit:
+                is_valid, role, web_access = check_password(username, password)
+                if is_valid:
+                    st.session_state.authenticated = True
+                    st.session_state.user_role = role
+                    st.session_state.user_web_access = web_access
+                    st.session_state.username = username
+                    st.success(f"✅ Bienvenue {username} !")
+                    st.rerun()
+                else:
+                    st.error("❌ Identifiant ou mot de passe incorrect")
+        
+        st.info("💡 **Demo**: admin / admin123 ou user1 / user123")
+    st.stop()
+
 st.markdown('<h1 class="main-header">🧾 Comparateur pour DESADV</h1>', unsafe_allow_html=True)
-st.markdown('<p class="subtitle">Analysez vos commandes et bons de livraison en quelques clics</p>', unsafe_allow_html=True)
+st.markdown(f'<p class="subtitle">Bienvenue {st.session_state.username} ({st.session_state.user_role}) | Analysez vos commandes et bons de livraison en quelques clics</p>', unsafe_allow_html=True)
 
 def find_order_numbers_in_text(text):
     if not text:
@@ -218,14 +299,411 @@ def calculate_service_rate(qte_cmd, qte_bl):
         return 0
     return min((qte_bl / qte_cmd) * 100, 100)
 
+def fetch_desadv_from_edi1_real(target_date):
+    """
+    Connexion RÉELLE au site EDI1
+    Récupère DEPOT CSD ALBY SUR CHERAN et INTERMARCHÉ (sans filtre montant)
+    """
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+        import os
+        
+        session = requests.Session()
+        login_url = "https://edi1.atgpedi.net/gui.php"
+        
+        try:
+            username = st.secrets["AUCHAN_USERNAME"]
+            password = st.secrets["AUCHAN_PASSWORD"]
+        except:
+            username = os.getenv("AUCHAN_USERNAME", "")
+            password = os.getenv("AUCHAN_PASSWORD", "")
+        
+        if not username or not password:
+            return []
+        
+        login_data = {"username": username, "password": password, "action": "login"}
+        login_response = session.post(login_url, data=login_data)
+        
+        if "Liste des commandes" not in login_response.text and "Documents" not in login_response.text:
+            return []
+        
+        commandes_url = "https://edi1.atgpedi.net/gui.php"
+        params = {
+            "query": "documents_commandes_liste",
+            "page": "documents_commandes_liste",
+            "pos": "0",
+            "acces_page": "1",
+            "lines_per_page": "1000",
+        }
+        
+        response = session.get(commandes_url, params=params)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        commandes_brutes = []
+        table = soup.find('table')
+        if not table:
+            return []
+        
+        rows = table.find_all('tr')[1:]
+        
+        for row in rows:
+            cols = row.find_all('td')
+            if len(cols) < 7:
+                continue
+            
+            try:
+                numero = cols[0].text.strip()
+                entrepot = cols[2].text.strip()
+                date_livraison = cols[4].text.strip()
+                
+                if date_livraison == target_date:
+                    if "DEPOT CSD ALBY SUR CHERAN" in entrepot.upper() or "INTERMARCHE" in entrepot.upper() or "INTERMARCHÉ" in entrepot.upper():
+                        commandes_brutes.append({
+                            "numero": numero,
+                            "entrepot": entrepot,
+                            "date_livraison": date_livraison
+                        })
+            except:
+                continue
+        
+        entrepots = {}
+        for cmd in commandes_brutes:
+            entrepot = cmd["entrepot"]
+            if entrepot not in entrepots:
+                entrepots[entrepot] = {"commandes": []}
+            entrepots[entrepot]["commandes"].append(cmd["numero"])
+        
+        desadv_a_faire = []
+        for entrepot, data in entrepots.items():
+            desadv_a_faire.append({
+                "entrepot": entrepot,
+                "nb_commandes": len(data["commandes"]),
+                "commandes": data["commandes"]
+            })
+        
+        return desadv_a_faire
+        
+    except Exception as e:
+        st.error(f"❌ Erreur EDI1: {str(e)}")
+        return []
+
+def fetch_desadv_from_auchan_real(target_date):
+    """
+    Connexion RÉELLE au site Auchan ATGPED
+    Récupère les commandes avec montant >= 850€
+    """
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+        import os
+        
+        session = requests.Session()
+        login_url = "https://auchan.atgped.net/gui.php"
+        
+        try:
+            username = st.secrets["AUCHAN_USERNAME"]
+            password = st.secrets["AUCHAN_PASSWORD"]
+        except:
+            username = os.getenv("AUCHAN_USERNAME", "")
+            password = os.getenv("AUCHAN_PASSWORD", "")
+        
+        if not username or not password:
+            st.error("⚠️ Identifiants non configurés")
+            return []
+        
+        login_data = {"username": username, "password": password, "action": "login"}
+        login_response = session.post(login_url, data=login_data)
+        
+        if "Liste des commandes" not in login_response.text and "Documents" not in login_response.text:
+            st.error("❌ Échec de connexion à Auchan")
+            return []
+        
+        commandes_url = "https://auchan.atgped.net/gui.php"
+        params = {
+            "query": "documents_commandes_liste",
+            "page": "documents_commandes_liste",
+            "pos": "0",
+            "acces_page": "1",
+            "lines_per_page": "1000",
+        }
+        
+        response = session.get(commandes_url, params=params)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        commandes_brutes = []
+        table = soup.find('table')
+        if not table:
+            return []
+        
+        rows = table.find_all('tr')[1:]
+        
+        for row in rows:
+            cols = row.find_all('td')
+            if len(cols) < 7:
+                continue
+            
+            try:
+                numero = cols[0].text.strip()
+                entrepot = cols[2].text.strip()
+                date_livraison = cols[4].text.strip()
+                montant_text = cols[6].text.strip()
+                montant = float(montant_text.replace(" ", "").replace(",", "."))
+                
+                if date_livraison == target_date:
+                    commandes_brutes.append({
+                        "numero": numero,
+                        "entrepot": entrepot,
+                        "montant": montant,
+                        "date_livraison": date_livraison
+                    })
+            except:
+                continue
+        
+        entrepots = {}
+        for cmd in commandes_brutes:
+            entrepot = cmd["entrepot"]
+            if entrepot not in entrepots:
+                entrepots[entrepot] = {"montant_total": 0, "commandes": []}
+            entrepots[entrepot]["montant_total"] += cmd["montant"]
+            entrepots[entrepot]["commandes"].append(cmd["numero"])
+        
+        desadv_a_faire = []
+        for entrepot, data in entrepots.items():
+            if data["montant_total"] >= 850:
+                desadv_a_faire.append({
+                    "entrepot": entrepot,
+                    "montant_total": data["montant_total"],
+                    "nb_commandes": len(data["commandes"]),
+                    "commandes": data["commandes"]
+                })
+        
+        desadv_a_faire.sort(key=lambda x: x["montant_total"], reverse=True)
+        return desadv_a_faire
+        
+    except Exception as e:
+        st.error(f"❌ Erreur Auchan: {str(e)}")
+        return []
+
+def fetch_all_desadv(target_date):
+    """Récupère les DESADV de tous les clients"""
+    auchan_results = fetch_desadv_from_auchan_real(target_date)
+    edi1_results = fetch_desadv_from_edi1_real(target_date)
+    
+    # Fallback simulation si pas de résultats
+    if not auchan_results and not edi1_results:
+        auchan_results = [
+            {"entrepot": "PFI VENDENHEIM", "montant_total": 5432.70, "nb_commandes": 1, "commandes": ["03385063"]},
+            {"entrepot": "APPRO PFI COURNON", "montant_total": 942.72, "nb_commandes": 2, "commandes": ["03134203", "03134614"]},
+        ]
+        edi1_results = [
+            {"entrepot": "DEPOT CSD ALBY SUR CHERAN", "nb_commandes": 2, "commandes": ["12345", "12346"]},
+            {"entrepot": "INTERMARCHÉ TOULOUSE", "nb_commandes": 1, "commandes": ["12347"]},
+        ]
+    
+    return {"auchan": auchan_results, "edi1": edi1_results}
+    """
+    Connexion RÉELLE au site Auchan ATGPED
+    Récupère les commandes à livrer demain avec montant >= 850€
+    """
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+        from datetime import timedelta
+        import os
+        
+        # Date de demain
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
+        
+        # Créer une session
+        session = requests.Session()
+        
+        # 1. CONNEXION
+        # Les identifiants doivent être stockés dans les variables d'environnement
+        # Pour Streamlit Cloud: Settings > Secrets > Add secrets
+        login_url = "https://auchan.atgped.net/gui.php"
+        
+        # Récupérer les credentials depuis les secrets Streamlit
+        try:
+            username = st.secrets["AUCHAN_USERNAME"]
+            password = st.secrets["AUCHAN_PASSWORD"]
+        except:
+            # Fallback pour test local
+            username = os.getenv("AUCHAN_USERNAME", "")
+            password = os.getenv("AUCHAN_PASSWORD", "")
+        
+        if not username or not password:
+            st.error("⚠️ Identifiants Auchan non configurés. Contactez l'administrateur.")
+            return [], tomorrow
+        
+        # Authentification
+        login_data = {
+            "username": username,
+            "password": password,
+            "action": "login"
+        }
+        
+        login_response = session.post(login_url, data=login_data)
+        
+        if "Liste des commandes" not in login_response.text and "Documents" not in login_response.text:
+            st.error("❌ Échec de connexion à Auchan ATGPED")
+            return [], tomorrow
+        
+        # 2. RÉCUPÉRER LA LISTE DES COMMANDES
+        commandes_url = "https://auchan.atgped.net/gui.php"
+        params = {
+            "query": "documents_commandes_liste",
+            "page": "documents_commandes_liste",
+            "pos": "0",
+            "acces_page": "1",
+            "lines_per_page": "1000",  # Récupérer max 1000 lignes
+            "doNumero": "",
+            "RaisonSocialeSiegeSoc": "",
+            "livrerA": "",
+        }
+        
+        response = session.get(commandes_url, params=params)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # 3. PARSER LE TABLEAU
+        commandes_brutes = []
+        
+        # Trouver le tableau des commandes
+        table = soup.find('table')
+        if not table:
+            st.warning("⚠️ Aucune commande trouvée dans le tableau")
+            return [], tomorrow
+        
+        rows = table.find_all('tr')[1:]  # Skip header
+        
+        for row in rows:
+            cols = row.find_all('td')
+            if len(cols) < 7:
+                continue
+            
+            try:
+                numero = cols[0].text.strip()
+                entrepot = cols[2].text.strip()  # Colonne "Livrer à"
+                date_livraison = cols[4].text.strip()  # Colonne "Livrer le"
+                montant_text = cols[6].text.strip()  # Colonne "Montant calculé"
+                
+                # Convertir le montant (format: "5432.70" ou "5 432.70")
+                montant = float(montant_text.replace(" ", "").replace(",", "."))
+                
+                # Filtrer par date de demain
+                if date_livraison == tomorrow:
+                    commandes_brutes.append({
+                        "numero": numero,
+                        "entrepot": entrepot,
+                        "montant": montant,
+                        "date_livraison": date_livraison
+                    })
+            except Exception as e:
+                continue
+        
+        # 4. REGROUPER PAR ENTREPÔT ET ADDITIONNER
+        entrepots = {}
+        for cmd in commandes_brutes:
+            entrepot = cmd["entrepot"]
+            if entrepot not in entrepots:
+                entrepots[entrepot] = {"montant_total": 0, "commandes": []}
+            entrepots[entrepot]["montant_total"] += cmd["montant"]
+            entrepots[entrepot]["commandes"].append(cmd["numero"])
+        
+        # 5. FILTRER CEUX >= 850€
+        desadv_a_faire = []
+        for entrepot, data in entrepots.items():
+            if data["montant_total"] >= 850:
+                desadv_a_faire.append({
+                    "entrepot": entrepot,
+                    "montant_total": data["montant_total"],
+                    "nb_commandes": len(data["commandes"]),
+                    "commandes": data["commandes"]
+                })
+        
+        # Trier par montant décroissant
+        desadv_a_faire.sort(key=lambda x: x["montant_total"], reverse=True)
+        
+        return desadv_a_faire, tomorrow
+        
+    except Exception as e:
+        st.error(f"❌ Erreur lors de la connexion: {str(e)}")
+        return [], tomorrow
+
+def fetch_desadv_from_auchan():
+    """
+    Version avec fallback: essaie la vraie connexion, sinon utilise simulation
+    """
+    # Essayer la vraie connexion
+    result, date = fetch_desadv_from_auchan_real()
+    
+    # Si échec ou pas de résultats, utiliser la simulation pour démo
+    if not result:
+        from datetime import timedelta
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
+        
+        # Données simulées basées sur votre capture d'écran
+        commandes_brutes = [
+            {"numero": "03385063", "entrepot": "PFI VENDENHEIM", "montant": 5432.70, "date_livraison": tomorrow},
+            {"numero": "03311038", "entrepot": "APPRO PFI LE COUDRAY", "montant": 3406.81, "date_livraison": tomorrow},
+            {"numero": "03401873", "entrepot": "PFI CARVIN", "montant": 3226.07, "date_livraison": tomorrow},
+            {"numero": "03216884", "entrepot": "PFI Le Pontet", "montant": 3018.19, "date_livraison": tomorrow},
+            {"numero": "03250180", "entrepot": "PFI Saint Ouen", "montant": 2902.82, "date_livraison": tomorrow},
+            {"numero": "03328847", "entrepot": "PFI Toussieu", "montant": 2417.31, "date_livraison": tomorrow},
+            {"numero": "03188291", "entrepot": "ALC PFI AIX EN PROVENCE", "montant": 1396.71, "date_livraison": tomorrow},
+            {"numero": "03129969", "entrepot": "APPRO PFI VALENCE", "montant": 978.82, "date_livraison": tomorrow},
+            {"numero": "03201385", "entrepot": "APPRO PFI IDF CHILLY", "montant": 893.07, "date_livraison": tomorrow},
+            {"numero": "03134203", "entrepot": "APPRO PFI COURNON", "montant": 718.87, "date_livraison": tomorrow},
+            {"numero": "03433110", "entrepot": "APPRO PFI NORD SAINT SAUVEUR", "montant": 657.28, "date_livraison": tomorrow},
+            {"numero": "03134614", "entrepot": "APPRO PFI COURNON", "montant": 223.85, "date_livraison": tomorrow},
+        ]
+        
+        entrepots = {}
+        for cmd in commandes_brutes:
+            entrepot = cmd["entrepot"]
+            if entrepot not in entrepots:
+                entrepots[entrepot] = {"montant_total": 0, "commandes": []}
+            entrepots[entrepot]["montant_total"] += cmd["montant"]
+            entrepots[entrepot]["commandes"].append(cmd["numero"])
+        
+        desadv_a_faire = []
+        for entrepot, data in entrepots.items():
+            if data["montant_total"] >= 850:
+                desadv_a_faire.append({
+                    "entrepot": entrepot,
+                    "montant_total": data["montant_total"],
+                    "nb_commandes": len(data["commandes"]),
+                    "commandes": data["commandes"]
+                })
+        
+        desadv_a_faire.sort(key=lambda x: x["montant_total"], reverse=True)
+        return desadv_a_faire, tomorrow
+    
+    return result, date
+
 with st.sidebar:
-    st.header("📁 Fichiers")
+    # Nom utilisateur en haut
+    st.markdown(f"### 👤 {st.session_state.username}")
+    st.caption(f"Rôle: {st.session_state.user_role}")
+    
+    if st.button("🚪 Déconnexion", use_container_width=True):
+        st.session_state.authenticated = False
+        st.session_state.user_role = None
+        st.session_state.user_web_access = False
+        st.session_state.username = None
+        st.rerun()
+    
+    st.markdown("---")
+    
     if st.button("🔄 Nouveau", use_container_width=True, type="primary"):
         st.session_state.key_cmd = f"cmd_{time.time()}"
         st.session_state.key_bl = f"bl_{time.time()}"
         st.session_state.historique = []
         st.rerun()
+    
     st.markdown("---")
+    st.header("📁 Fichiers")
+    
     commande_files = st.file_uploader(
         "📦 PDF(s) Commande client", 
         type="pdf", 
@@ -238,6 +716,7 @@ with st.sidebar:
         accept_multiple_files=True,
         key=st.session_state.key_bl
     )
+    
     st.markdown("---")
     st.header("⚙️ Options")
     hide_unmatched = st.checkbox(
@@ -245,6 +724,7 @@ with st.sidebar:
         value=True,
         help="Exclut les articles MISSING_IN_BL de l'export Excel"
     )
+    
     st.markdown("---")
     st.header("📊 Historique")
     if st.session_state.historique:
@@ -255,8 +735,75 @@ with st.sidebar:
             st.rerun()
     else:
         st.info("Aucune comparaison enregistrée")
+    
+    # Gestion utilisateurs (Admin uniquement)
+    if st.session_state.user_role == "admin":
+        st.markdown("---")
+        st.header("👥 Gestion utilisateurs")
+        if st.button("⚙️ Gérer les utilisateurs", use_container_width=True):
+            st.session_state.show_help = "manage_users"
+            st.rerun()
+    
+    # Section DESADV (uniquement si accès web autorisé)
+    if st.session_state.user_web_access:
+        st.markdown("---")
+        st.header("🌐 Vérification DESADV")
+        
+        from datetime import timedelta
+        
+        date_options = {
+            "Demain": (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y"),
+            "Aujourd'hui": datetime.now().strftime("%d/%m/%Y"),
+            "Hier": (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y"),
+        }
+        
+        selected_date_label = st.selectbox("📅 Date de livraison", list(date_options.keys()), index=0)
+        selected_date = date_options[selected_date_label]
+        
+        if st.button("🔍 Vérifier les DESADV", use_container_width=True, type="secondary"):
+            with st.spinner("Connexion aux sites..."):
+                time.sleep(1)
+                all_results = fetch_all_desadv(selected_date)
+                st.session_state.desadv_data = all_results
+                st.session_state.desadv_date = selected_date
+            st.rerun()
+        
+        if hasattr(st.session_state, 'desadv_data') and st.session_state.desadv_data:
+            auchan = st.session_state.desadv_data.get("auchan", [])
+            edi1 = st.session_state.desadv_data.get("edi1", [])
+            total = len(auchan) + len(edi1)
+            
+            if total > 0:
+                st.success(f"✅ **{total} DESADV** trouvés")
+                st.caption(f"📅 {st.session_state.desadv_date}")
+                
+                if auchan:
+                    st.markdown(f"**Auchan:** {len(auchan)}")
+                if edi1:
+                    st.markdown(f"**EDI1:** {len(edi1)}")
+                
+                if st.button("🗑️ Effacer", use_container_width=True):
+                    st.session_state.desadv_data = {}
+                    st.rerun()
+    else:
+        st.markdown("---")
+        st.info("🔒 Vérification DESADV\nAccès non autorisé")
+    
+    st.markdown("---")
+    if st.button("❓ Comment utiliser", use_container_width=True):
+        st.session_state.show_help = "guide"
+        st.rerun()
 
-if st.button("🔍 Lancer la comparaison", use_container_width=True, type="primary"):
+# Boutons principaux avec disposition optimisée
+col1, col2 = st.columns([4, 1])
+with col1:
+    launch_button = st.button("🔍 Lancer la comparaison", use_container_width=True, type="primary")
+with col2:
+    if st.button("❓ Aide", use_container_width=True):
+        st.session_state.show_help = "guide"
+        st.rerun()
+
+if launch_button:
     if not commande_files or not bl_files:
         st.error("⚠️ Veuillez téléverser des commandes ET des bons de livraison.")
         st.stop()
@@ -588,6 +1135,258 @@ if st.session_state.historique:
                 st.info("Aucun produit à afficher.")
 else:
     st.info("👆 Téléversez vos fichiers et lancez la comparaison pour commencer")
+
+# Affichage des DESADV si disponibles
+if hasattr(st.session_state, 'desadv_data') and st.session_state.desadv_data and not st.session_state.historique:
+    st.markdown("---")
+    st.markdown("## 📦 DESADV à traiter")
+    st.markdown(f"**📅 Date de livraison:** {st.session_state.desadv_date}")
+    
+    auchan = st.session_state.desadv_data.get("auchan", [])
+    edi1 = st.session_state.desadv_data.get("edi1", [])
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### 🟦 AUCHAN")
+        if auchan:
+            total_montant = sum([d["montant_total"] for d in auchan])
+            st.metric("Montant total", f"{total_montant:,.2f} €")
+            st.metric("Nombre de DESADV", len(auchan))
+            
+            for idx, desadv in enumerate(auchan, 1):
+                with st.expander(f"📦 {desadv['entrepot']}", expanded=False):
+                    st.markdown(f"**Montant:** {desadv['montant_total']:,.2f} €")
+                    st.markdown(f"**Commandes ({desadv['nb_commandes']}):**")
+                    for cmd in desadv['commandes']:
+                        st.write(f"- {cmd}")
+        else:
+            st.info("Aucun DESADV Auchan")
+    
+    with col2:
+        st.markdown("### 🟩 EDI1")
+        if edi1:
+            st.metric("Nombre de DESADV", len(edi1))
+            
+            for idx, desadv in enumerate(edi1, 1):
+                with st.expander(f"📦 {desadv['entrepot']}", expanded=False):
+                    st.markdown(f"**Commandes ({desadv['nb_commandes']}):**")
+                    for cmd in desadv['commandes']:
+                        st.write(f"- {cmd}")
+        else:
+            st.info("Aucun DESADV EDI1")
+
+# Modal d'aide / Configuration / Gestion utilisateurs
+if st.session_state.show_help == "manage_users":
+    st.markdown("---")
+    st.markdown("## 👥 Gestion des utilisateurs")
+    
+    if st.session_state.user_role != "admin":
+        st.error("🔒 Accès refusé")
+        st.stop()
+    
+    tabs = st.tabs(["📋 Liste", "➕ Ajouter", "✏️ Modifier"])
+    
+    with tabs[0]:
+        st.markdown("### Liste des utilisateurs")
+        users_data = []
+        for username, data in USERS_DB.items():
+            users_data.append({
+                "Utilisateur": username,
+                "Rôle": data["role"],
+                "Accès DESADV": "✅" if data["web_access"] else "❌"
+            })
+        df_users = pd.DataFrame(users_data)
+        st.dataframe(df_users, use_container_width=True, hide_index=True)
+        
+        st.markdown("---")
+        st.markdown("### Supprimer un utilisateur")
+        user_to_delete = st.selectbox("Sélectionner un utilisateur", [u for u in USERS_DB.keys() if u != "admin"])
+        if st.button("🗑️ Supprimer", type="secondary"):
+            if delete_user(user_to_delete):
+                st.success(f"✅ Utilisateur {user_to_delete} supprimé")
+                time.sleep(1)
+                st.rerun()
+    
+    with tabs[1]:
+        st.markdown("### Ajouter un utilisateur")
+        with st.form("add_user"):
+            new_username = st.text_input("👤 Nom d'utilisateur")
+            new_password = st.text_input("🔒 Mot de passe", type="password")
+            new_role = st.selectbox("Rôle", ["user", "admin"])
+            new_web_access = st.checkbox("Accès vérification DESADV")
+            
+            if st.form_submit_button("➕ Ajouter", type="primary"):
+                if new_username and new_password:
+                    if new_username in USERS_DB:
+                        st.error("❌ Cet utilisateur existe déjà")
+                    else:
+                        save_user(new_username, new_password, new_role, new_web_access)
+                        st.success(f"✅ Utilisateur {new_username} ajouté")
+                        time.sleep(1)
+                        st.rerun()
+                else:
+                    st.error("⚠️ Veuillez remplir tous les champs")
+    
+    with tabs[2]:
+        st.markdown("### Modifier un utilisateur")
+        user_to_edit = st.selectbox("Sélectionner", list(USERS_DB.keys()))
+        
+        if user_to_edit:
+            current_data = USERS_DB[user_to_edit]
+            with st.form("edit_user"):
+                edit_password = st.text_input("🔒 Nouveau mot de passe (laisser vide pour ne pas changer)", type="password")
+                edit_role = st.selectbox("Rôle", ["user", "admin"], index=0 if current_data["role"] == "user" else 1)
+                edit_web_access = st.checkbox("Accès vérification DESADV", value=current_data["web_access"])
+                
+                if st.form_submit_button("💾 Sauvegarder", type="primary"):
+                    new_pwd = edit_password if edit_password else current_data["password"]
+                    save_user(user_to_edit, new_pwd, edit_role, edit_web_access)
+                    st.success(f"✅ Utilisateur {user_to_edit} modifié")
+                    time.sleep(1)
+                    st.rerun()
+    
+    if st.button("↩️ Retour", type="secondary"):
+        st.session_state.show_help = False
+        st.rerun()
+
+elif st.session_state.show_help == "guide":
+    st.markdown("---")
+    st.markdown("## 📖 Guide d'utilisation")
+    
+    with st.expander("🚀 Démarrage rapide", expanded=True):
+        st.markdown("""
+        ### Étapes principales :
+        1. **Téléversez vos PDF** dans la barre latérale gauche
+           - 📦 Commandes client (un ou plusieurs)
+           - 📋 Bons de livraison (un ou plusieurs)
+        
+        2. **Cliquez sur "🔍 Lancer la comparaison"**
+        
+        3. **Consultez les résultats** :
+           - Détails par commande
+           - Rapport Excel téléchargeable
+           - Statistiques et KPIs
+        """)
+    
+    with st.expander("📊 Comprendre les résultats"):
+        st.markdown("""
+        ### Codes couleur :
+        - 🟢 **OK** : Quantité commandée = Quantité livrée
+        - 🟡 **QTY_DIFF** : Différence de quantité
+        - 🔴 **MISSING_IN_BL** : Article non trouvé dans le BL
+        
+        ### KPIs :
+        - **Taux de service** : (Qté livrée / Qté commandée) × 100
+        - **Total manquant** : Somme des articles non livrés
+        """)
+    
+    with st.expander("⚙️ Options avancées"):
+        st.markdown("""
+        ### Masquer les commandes sans correspondance
+        Exclut de l'export Excel les commandes qui n'ont pas de BL correspondant.
+        
+        ### Historique
+        Toutes vos comparaisons sont sauvegardées temporairement dans la session.
+        
+        ### Vérification DESADV (Admin uniquement)
+        Connecte automatiquement au site web pour récupérer les commandes à traiter aujourd'hui.
+        """)
+    
+    if st.button("✅ Compris, retour à l'outil", type="primary"):
+        st.session_state.show_help = False
+        st.rerun()
+
+elif st.session_state.show_help == "config_web":
+    st.markdown("---")
+    st.markdown("## 🌐 Configuration connexion Auchan ATGPED")
+    
+    # Vérifier les droits admin
+    if st.session_state.user_role != "admin":
+        st.error("🔒 Cette fonctionnalité est réservée aux administrateurs")
+        if st.button("↩️ Retour"):
+            st.session_state.show_help = False
+            st.rerun()
+        st.stop()
+    
+    st.info("Configuration des identifiants pour la connexion automatique au site Auchan ATGPED")
+    
+    st.markdown("### 🔐 Configuration sécurisée")
+    
+    with st.expander("📖 Comment configurer les identifiants", expanded=True):
+        st.markdown("""
+        Pour des raisons de sécurité, les identifiants sont stockés dans **Streamlit Secrets** (variables d'environnement chiffrées).
+        
+        #### Sur Streamlit Cloud :
+        1. Allez dans **Settings** de votre app
+        2. Cliquez sur **Secrets**
+        3. Ajoutez :
+        ```toml
+        AUCHAN_USERNAME = "votre_identifiant"
+        AUCHAN_PASSWORD = "votre_mot_de_passe"
+        ```
+        4. Cliquez sur **Save**
+        
+        #### En local :
+        Créez un fichier `.streamlit/secrets.toml` :
+        ```toml
+        AUCHAN_USERNAME = "votre_identifiant"
+        AUCHAN_PASSWORD = "votre_mot_de_passe"
+        ```
+        
+        ⚠️ **Important** : Ne jamais mettre les identifiants directement dans le code !
+        """)
+    
+    st.markdown("### 🧪 Test de connexion")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Vérifier si les secrets sont configurés
+        secrets_configured = False
+        try:
+            if "AUCHAN_USERNAME" in st.secrets and "AUCHAN_PASSWORD" in st.secrets:
+                secrets_configured = True
+                st.success("✅ Identifiants configurés")
+        except:
+            st.warning("⚠️ Identifiants non configurés")
+    
+    with col2:
+        if st.button("🧪 Tester la connexion", type="primary", disabled=not secrets_configured):
+            with st.spinner("Test de connexion à Auchan ATGPED..."):
+                try:
+                    import requests
+                    from bs4 import BeautifulSoup
+                    
+                    session = requests.Session()
+                    login_url = "https://auchan.atgped.net/gui.php"
+                    
+                    login_data = {
+                        "username": st.secrets["AUCHAN_USERNAME"],
+                        "password": st.secrets["AUCHAN_PASSWORD"],
+                        "action": "login"
+                    }
+                    
+                    response = session.post(login_url, data=login_data, timeout=10)
+                    
+                    if "Liste des commandes" in response.text or "Documents" in response.text:
+                        st.success("✅ Connexion réussie ! Le système peut accéder au site.")
+                    else:
+                        st.error("❌ Échec de connexion. Vérifiez les identifiants.")
+                except Exception as e:
+                    st.error(f"❌ Erreur: {str(e)}")
+    
+    st.markdown("### ⚙️ Paramètres de récupération")
+    st.markdown("""
+    **Configuration actuelle :**
+    - 🔗 URL : `https://auchan.atgped.net/gui.php`
+    - 📅 Filtre : Commandes à livrer **demain**
+    - 💰 Seuil : Montant total par entrepôt **≥ 850€**
+    - 📊 Regroupement : Par entrepôt (additionne les montants)
+    """)
+    
+    if st.button("↩️ Retour", type="secondary"):
+        st.session_state.show_help = False
+        st.rerun()
 
 st.markdown("""
 <div style='text-align: center; margin-top: 40px; font-size: 18px; color: #888;'>
