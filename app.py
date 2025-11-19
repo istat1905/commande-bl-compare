@@ -514,7 +514,8 @@ if st.session_state.historique:
                     xaxis_title='N° Commande',
                     yaxis_title='Taux de service (%)',
                     yaxis_range=[0, 110],
-                    showlegend=False
+                    showlegend=False,
+                    xaxis=dict(type='category')
                 )
                 st.plotly_chart(fig_service, use_container_width=True)
             else:
