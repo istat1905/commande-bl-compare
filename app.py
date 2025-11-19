@@ -14,17 +14,13 @@ try:
     import plotly.express as px
     import plotly.graph_objects as go
     PLOTLY_AVAILABLE = True
-except ImportError:
+except Exception:
     PLOTLY_AVAILABLE = False
 
 # ----------------------
 # CONFIG / CSS / LOGO
 # ----------------------
-st.set_page_config(
-    page_title="DESATHOR",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="DESATHOR", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
@@ -40,17 +36,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Try to load logo; if fail, show nothing (no crash)
 logo_path = "Desathor.png"
 if os.path.exists(logo_path):
     try:
         with open(logo_path, "rb") as f:
             data = f.read()
         encoded = base64.b64encode(data).decode()
-        st.markdown(
-            f"""<div class="logo-container"><img src="data:image/png;base64,{encoded}" style="width:250px; max-width:80%; height:auto;"></div>""",
-            unsafe_allow_html=True
-        )
+        st.markdown(f"""<div class="logo-container"><img src="data:image/png;base64,{encoded}" style="width:250px; max-width:80%; height:auto;"></div>""", unsafe_allow_html=True)
     except Exception:
         pass
 
@@ -76,7 +68,6 @@ if "user_role" not in st.session_state:
 # UTIL: Utilitaires divers
 # ----------------------
 def parse_number_fr(text):
-    """Convertit '1 234,56' ou '1234.56' -> float"""
     if text is None:
         return 0.0
     txt = str(text).strip()
@@ -91,7 +82,6 @@ def parse_number_fr(text):
 # ----------------------
 # USERS DB (DEMO)
 # ----------------------
-# En production remplacez par vraie base avec hash bcrypt
 USERS_DB = {
     "admin": {"password": "admin123", "role": "admin", "web_access": True},
     "user1": {"password": "user123", "role": "user", "web_access": False},
@@ -116,19 +106,16 @@ def delete_user(username):
 # EAN13 validation
 # ----------------------
 def is_valid_ean13(code):
-    """Vérifie longueur, chiffres et checksum EAN13 (retourne False si invalid ou préfixes exclus)."""
     if not code:
         return False
     s = re.sub(r"\D", "", str(code))
     if len(s) != 13:
         return False
-    # optional prefix exclusion (conservez si vous voulez)
     if s.startswith(('302', '376')):
         return False
-    # checksum
     digits = [int(c) for c in s]
     checksum = digits[-1]
-    evens = sum(digits[-2::-2])  # positions from right, every 2
+    evens = sum(digits[-2::-2])
     odds = sum(digits[-3::-2])
     total = odds + evens * 3
     calc = (10 - (total % 10)) % 10
@@ -149,7 +136,6 @@ def extract_records_from_command_pdf(pdf_file):
                 full_text += "\n" + txt
                 lines = txt.split("\n")
                 for ligne in lines:
-                    # find order numbers with robust patterns
                     order_nums = []
                     for pat in [
                         r"Commande\s*n[°º]?\s*[:\s-]*?(\d{4,12})",
@@ -164,14 +150,12 @@ def extract_records_from_command_pdf(pdf_file):
                     if order_nums:
                         current_order = order_nums[0]
 
-                    # heuristique simple: si ligne contient EAN 13 valide, récupérer
                     ean_matches = re.findall(r"\b(\d{13})\b", ligne)
                     valid_eans = [ean for ean in ean_matches if is_valid_ean13(ean)]
                     if not valid_eans:
                         continue
                     ean = valid_eans[0]
 
-                    # qté: chercher "Qté", "QTE", "Qty", "Quantité", ou dernier nombre plausible
                     qte = None
                     m = re.search(r"(?:Qt[eé]e|QTE|Qty|Quantit[eé])\s*[:\-]?\s*([0-9]+(?:[.,][0-9]+)?)", ligne, flags=re.IGNORECASE)
                     if m:
@@ -180,16 +164,13 @@ def extract_records_from_command_pdf(pdf_file):
                         except:
                             qte = None
                     if qte is None:
-                        # fallback: prendre dernier integer < 100000
                         nums = re.findall(r"\b(\d{1,6})\b", ligne)
                         nums = [int(n) for n in nums if len(n) < 7]
                         if nums:
-                            # try to pick number not EAN and likely not code article (heuristic)
                             qte = nums[-1]
                     if qte is None:
                         continue
 
-                    # code article/ref fournisseur: chercher groupe avant l'ean si numérique court
                     parts = ligne.split()
                     code_article = ""
                     for i, p in enumerate(parts):
@@ -209,12 +190,6 @@ def extract_records_from_command_pdf(pdf_file):
     except Exception as e:
         st.error(f"Erreur lecture PDF commande: {e}")
         return {"records": [], "order_numbers": [], "full_text": ""}
-    order_numbers = []
-    for pat in [r"(\d{4,12})"]:
-        for m in re.finditer(pat, full_text):
-            # not strict; keep only numbers near words "Commande"
-            pass
-    # keep prior approach for order numbers using find_order_numbers_in_text logic
     order_numbers = re.findall(r"\b\d{4,12}\b", full_text)
     return {"records": records, "order_numbers": order_numbers, "full_text": full_text}
 
@@ -228,7 +203,6 @@ def extract_records_from_bl_pdf(pdf_file):
                 txt = page.extract_text() or ""
                 full_text += "\n" + txt
                 for ligne in txt.split("\n"):
-                    # find order numbers
                     order_nums = []
                     for pat in [
                         r"Commande\s*n[°º]?\s*[:\s-]*?(\d{4,12})",
@@ -248,7 +222,6 @@ def extract_records_from_bl_pdf(pdf_file):
                         continue
                     ean = valid_eans[0]
 
-                    # qte: try Qty labels or last numeric with decimals
                     qte = None
                     m = re.search(r"(?:Qt[eé]e|QTE|Qty|Quantit[eé])\s*[:\-]?\s*([0-9]+(?:[.,][0-9]+)?)", ligne, flags=re.IGNORECASE)
                     if m:
@@ -277,7 +250,7 @@ def extract_records_from_bl_pdf(pdf_file):
     return {"records": records, "order_numbers": order_numbers, "full_text": full_text}
 
 # ----------------------
-# SCRAPING DESADV (Auchan & EDI1) - robust functions
+# SCRAPING DESADV (Auchan & EDI1) - improved
 # ----------------------
 import requests
 from bs4 import BeautifulSoup
@@ -286,14 +259,12 @@ from urllib3.util.retry import Retry
 
 def robust_session(retries=3, backoff_factor=0.3, status_forcelist=(500,502,503,504)):
     s = requests.Session()
-    retry = Retry(total=retries, read=retries, connect=retries,
-                  backoff_factor=backoff_factor, status_forcelist=status_forcelist)
+    retry = Retry(total=retries, read=retries, connect=retries, backoff_factor=backoff_factor, status_forcelist=status_forcelist)
     adapter = HTTPAdapter(max_retries=retry)
     s.mount("https://", adapter)
     s.mount("http://", adapter)
     s.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
     })
     return s
@@ -311,9 +282,9 @@ def _find_column_indices(table):
     for i, h in enumerate(header):
         if indices['numero'] is None and any(k in h for k in ['num', 'n°', 'numero', 'no commande', 'commande']):
             indices['numero'] = i
-        if indices['entrepot'] is None and any(k in h for k in ['livrer', 'livrer à', 'livrer a', 'livraison', 'adresse livraison', 'livré à']):
+        if indices['entrepot'] is None and any(k in h for k in ['livrer', 'livrer à', 'livrer a', 'livraison', 'adresse livraison', 'livré à', 'client']):
             indices['entrepot'] = i
-        if indices['date'] is None and any(k in h for k in ['livrer le', 'livrer', 'date', 'livraison']):
+        if indices['date'] is None and any(k in h for k in ['livrer le', 'livrer', 'date', 'création le', 'création']):
             indices['date'] = i
         if indices['montant'] is None and 'montant' in h:
             indices['montant'] = i
@@ -321,10 +292,16 @@ def _find_column_indices(table):
         indices['numero'] = 0
     return indices
 
+def _extract_date_only(text):
+    if not text:
+        return ""
+    m = re.search(r"(\d{2}/\d{2}/\d{4})", text)
+    return m.group(1) if m else text.strip()
+
 def fetch_desadv_from_auchan_real(target_date, min_amount=850.0, username=None, password=None, timeout=15):
     """
-    target_date: str 'dd/mm/YYYY'
-    retourne dict {'error': None, 'data': [...] } ou {'error': '...', 'data': []}
+    target_date format 'dd/mm/YYYY'
+    returns {'error': None, 'data': [...]} or with 'error' and quick 'html' snippet for debug
     """
     try:
         if username is None or password is None:
@@ -340,6 +317,7 @@ def fetch_desadv_from_auchan_real(target_date, min_amount=850.0, username=None, 
 
         session = robust_session()
         login_url = "https://auchan.atgped.net/gui.php"
+        # GET login page
         r = session.get(login_url, timeout=timeout)
         if r.status_code != 200:
             return {"error": f"login_page_status_{r.status_code}", "data": [], "html": r.text[:4000]}
@@ -351,20 +329,17 @@ def fetch_desadv_from_auchan_real(target_date, min_amount=850.0, username=None, 
             if name:
                 payload[name] = inp.get("value", "")
 
-        payload.update({
-            "username": username,
-            "password": password,
-            "action": "login"
-        })
+        payload.update({"username": username, "password": password, "action": "login"})
         r2 = session.post(login_url, data=payload, headers={"Referer": login_url}, timeout=timeout, allow_redirects=True)
         if r2.status_code >= 400:
             return {"error": f"login_post_status_{r2.status_code}", "data": [], "html": r2.text[:4000]}
 
         txt2 = r2.text.lower()
         if not any(k in txt2 for k in ["liste des commandes", "documents", "logout", "déconnexion", "deconnexion"]):
-            # save sample html for debug
+            # maybe the page uses different wording; return snippet for debug
             return {"error": "login_failed", "data": [], "html": r2.text[:4000]}
 
+        # GET commandes list page (explicit params like in screenshot)
         commandes_url = login_url
         params = {
             "query": "documents_commandes_liste",
@@ -380,7 +355,17 @@ def fetch_desadv_from_auchan_real(target_date, min_amount=850.0, username=None, 
         soup3 = BeautifulSoup(r3.content, "html.parser")
         table = soup3.find("table")
         if not table:
-            return {"error": "no_table_found", "data": [], "html": r3.text[:4000]}
+            # try second attempt: direct page param in URL string
+            try_url = f"{login_url}?query=documents_commandes_liste&page=documents_commandes_liste&acces_page=1&lines_per_page=1000"
+            r_alt = session.get(try_url, timeout=timeout)
+            if r_alt.status_code == 200:
+                soup_alt = BeautifulSoup(r_alt.content, "html.parser")
+                table = soup_alt.find("table")
+                if table:
+                    soup3 = soup_alt
+                    r3 = r_alt
+            if not table:
+                return {"error": "no_table_found", "data": [], "html": r3.text[:4000]}
 
         idx = _find_column_indices(table)
         rows = table.find_all("tr")
@@ -392,17 +377,13 @@ def fetch_desadv_from_auchan_real(target_date, min_amount=850.0, username=None, 
             try:
                 numero = cols[idx['numero']] if idx['numero'] is not None and idx['numero'] < len(cols) else cols[0]
                 entrepot = cols[idx['entrepot']] if idx['entrepot'] is not None and idx['entrepot'] < len(cols) else (cols[2] if len(cols) > 2 else "")
-                date_livraison = cols[idx['date']] if idx['date'] is not None and idx['date'] < len(cols) else ""
+                date_livraison_raw = cols[idx['date']] if idx['date'] is not None and idx['date'] < len(cols) else ""
+                date_livraison = _extract_date_only(date_livraison_raw)
                 montant_text = cols[idx['montant']] if idx['montant'] is not None and idx['montant'] < len(cols) else (cols[-1] if cols else "")
                 if date_livraison.strip() != target_date:
                     continue
                 montant = parse_number_fr(montant_text)
-                commandes_brutes.append({
-                    "numero": numero.strip(),
-                    "entrepot": entrepot.strip(),
-                    "montant": montant,
-                    "date_livraison": date_livraison.strip()
-                })
+                commandes_brutes.append({"numero": numero.strip(), "entrepot": entrepot.strip(), "montant": montant, "date_livraison": date_livraison.strip()})
             except Exception:
                 continue
 
@@ -416,12 +397,7 @@ def fetch_desadv_from_auchan_real(target_date, min_amount=850.0, username=None, 
         desadv_a_faire = []
         for entrepot, data in entrepots.items():
             if data["montant_total"] >= float(min_amount):
-                desadv_a_faire.append({
-                    "entrepot": entrepot,
-                    "montant_total": data["montant_total"],
-                    "nb_commandes": len(data["commandes"]),
-                    "commandes": data["commandes"]
-                })
+                desadv_a_faire.append({"entrepot": entrepot, "montant_total": data["montant_total"], "nb_commandes": len(data["commandes"]), "commandes": data["commandes"]})
 
         desadv_a_faire.sort(key=lambda x: x["montant_total"], reverse=True)
         return {"error": None, "data": desadv_a_faire}
@@ -430,6 +406,10 @@ def fetch_desadv_from_auchan_real(target_date, min_amount=850.0, username=None, 
         return {"error": f"exception:{str(e)}", "data": []}
 
 def fetch_desadv_from_edi1_real(target_date, allowed_entrepots=None, username=None, password=None, timeout=15):
+    """
+    target_date: 'dd/mm/YYYY'
+    allowed_entrepots: list of substrings to match (['ALBY','DOLE','LUXEMONT'])
+    """
     try:
         if allowed_entrepots is None:
             allowed_entrepots = ['ALBY', 'DOLE', 'LUXEMONT']
@@ -459,6 +439,11 @@ def fetch_desadv_from_edi1_real(target_date, allowed_entrepots=None, username=No
                 return {"error": f"edi1_login_status_{r2.status_code}", "data": [], "html": r2.text[:4000]}
             content = r2.content
 
+        # fetch the commandes list page explicitly (like in screenshot)
+        try_url = "https://edi1.atgpedi.net/gui.php?query=documents_commandes_liste&page=documents_commandes_liste&acces_page=1&lines_per_page=1000"
+        r3 = session.get(try_url, timeout=timeout)
+        if r3.status_code == 200:
+            content = r3.content
         soup3 = BeautifulSoup(content, "html.parser")
         table = soup3.find("table")
         if not table:
@@ -474,7 +459,8 @@ def fetch_desadv_from_edi1_real(target_date, allowed_entrepots=None, username=No
             try:
                 numero = cols[idx['numero']] if idx['numero'] is not None and idx['numero'] < len(cols) else cols[0]
                 entrepot = cols[idx['entrepot']] if idx['entrepot'] is not None and idx['entrepot'] < len(cols) else (cols[2] if len(cols) > 2 else "")
-                date_livraison = cols[idx['date']] if idx['date'] is not None and idx['date'] < len(cols) else ""
+                date_livraison_raw = cols[idx['date']] if idx['date'] is not None and idx['date'] < len(cols) else ""
+                date_livraison = _extract_date_only(date_livraison_raw)
                 if date_livraison.strip() != target_date:
                     continue
                 eup = entrepot.upper()
@@ -485,11 +471,7 @@ def fetch_desadv_from_edi1_real(target_date, allowed_entrepots=None, username=No
                         break
                 if not allowed_match:
                     continue
-                commandes_brutes.append({
-                    "numero": numero.strip(),
-                    "entrepot": entrepot.strip(),
-                    "date_livraison": date_livraison.strip()
-                })
+                commandes_brutes.append({"numero": numero.strip(), "entrepot": entrepot.strip(), "date_livraison": date_livraison.strip()})
             except Exception:
                 continue
 
@@ -498,14 +480,9 @@ def fetch_desadv_from_edi1_real(target_date, allowed_entrepots=None, username=No
             e = cmd["entrepot"]
             entrepots.setdefault(e, {"commandes": []})
             entrepots[e]["commandes"].append(cmd["numero"])
-
         desadv_a_faire = []
         for entrepot, data in entrepots.items():
-            desadv_a_faire.append({
-                "entrepot": entrepot,
-                "nb_commandes": len(data["commandes"]),
-                "commandes": data["commandes"]
-            })
+            desadv_a_faire.append({"entrepot": entrepot, "nb_commandes": len(data["commandes"]), "commandes": data["commandes"]})
         return {"error": None, "data": desadv_a_faire}
     except Exception as e:
         return {"error": f"exception:{str(e)}", "data": []}
@@ -618,7 +595,6 @@ with st.sidebar:
     else:
         st.info("Aucune comparaison enregistrée")
 
-    # Gestion utilisateurs (Admin)
     if st.session_state.user_role == "admin":
         st.markdown("---")
         st.header("👥 Gestion utilisateurs")
@@ -626,7 +602,6 @@ with st.sidebar:
             st.session_state.show_help = "manage_users"
             st.rerun()
 
-    # DESADV section (if allowed)
     if st.session_state.user_web_access:
         st.markdown("---")
         st.header("🌐 Vérification DESADV")
@@ -670,6 +645,10 @@ with st.sidebar:
                 if st.button("🗑️ Effacer", use_container_width=True):
                     st.session_state.desadv_data = {}
                     st.rerun()
+            # debug quick view of errors (helpful while tuning)
+            if st.session_state.desadv_data.get("errors"):
+                st.write("DEBUG errors:", st.session_state.desadv_data.get("errors"))
+
     else:
         st.markdown("---")
         st.info("🔒 Vérification DESADV\nAccès non autorisé")
@@ -743,13 +722,7 @@ if launch_button:
             merged["diff"] = merged["qte_bl"] - merged["qte_commande"]
             merged["taux_service"] = merged.apply(lambda r: min((r["qte_bl"] / r["qte_commande"] * 100) if r["qte_commande"] > 0 else 0, 100), axis=1)
             results[order_num] = merged
-        comparison_data = {
-            "timestamp": datetime.now(),
-            "results": results,
-            "commandes_dict": commandes_dict,
-            "bls_dict": bls_dict,
-            "hide_unmatched": hide_unmatched
-        }
+        comparison_data = {"timestamp": datetime.now(), "results": results, "commandes_dict": commandes_dict, "bls_dict": bls_dict, "hide_unmatched": hide_unmatched}
         st.session_state.historique.append(comparison_data)
 
 # ----------------------
@@ -786,9 +759,7 @@ if st.session_state.historique:
         total_cmd = df["qte_commande"].sum()
         total_bl = df["qte_bl"].sum()
         taux = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
-        with st.expander(
-            f"📦 Commande **{order_num}** — Taux de service: **{taux:.1f}%** | ✅ {n_ok} | ⚠️ {n_diff} | ❌ {n_miss}"
-        ):
+        with st.expander(f"📦 Commande **{order_num}** — Taux de service: **{taux:.1f}%** | ✅ {n_ok} | ⚠️ {n_diff} | ❌ {n_miss}"):
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("Commandé", int(total_cmd))
@@ -832,16 +803,7 @@ if st.session_state.historique:
                     worksheet.set_row(excel_row, None, diff_format)
                 elif row.get('status') == 'MISSING_IN_BL':
                     worksheet.set_row(excel_row, None, miss_format)
-        summary_data = {
-            'Commande': [],
-            'Taux de service (%)': [],
-            'Qté commandée': [],
-            'Qté livrée': [],
-            'Qté manquante': [],
-            'Articles OK': [],
-            'Articles différence': [],
-            'Articles manquants': []
-        }
+        summary_data = {'Commande': [], 'Taux de service (%)': [], 'Qté commandée': [], 'Qté livrée': [], 'Qté manquante': [], 'Articles OK': [], 'Articles différence': [], 'Articles manquants': []}
         for order_num, df in results.items():
             total_bl = df["qte_bl"].sum() if "qte_bl" in df.columns else 0
             if hide_unmatched and total_bl == 0:
@@ -862,13 +824,7 @@ if st.session_state.historique:
 
     col1, col2 = st.columns([3, 1])
     with col1:
-        st.download_button(
-            "📥 Télécharger le rapport Excel",
-            data=output.getvalue(),
-            file_name=filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
+        st.download_button("📥 Télécharger le rapport Excel", data=output.getvalue(), file_name=filename, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
     with col2:
         if st.button("🗑️ Supprimer ce résultat", use_container_width=True):
             st.session_state.historique.pop()
@@ -957,12 +913,7 @@ if st.session_state.historique:
             if not order_included(df):
                 continue
             for _, row in df.iterrows():
-                all_products.append({
-                    "Code article": row["code_article"],
-                    "EAN": row["ref"],
-                    "Qté commandée": int(row["qte_commande"]),
-                    "Qté livrée": int(row["qte_bl"])
-                })
+                all_products.append({"Code article": row["code_article"], "EAN": row["ref"], "Qté commandée": int(row["qte_commande"]), "Qté livrée": int(row["qte_bl"])})
         if all_products:
             df_products = pd.DataFrame(all_products)
         else:
@@ -1086,19 +1037,11 @@ elif st.session_state.show_help == "guide":
     st.markdown("---")
     st.markdown("## 📖 Guide d'utilisation")
     with st.expander("🚀 Démarrage rapide", expanded=True):
-        st.markdown("""
-        1. Téléversez vos PDF: Commandes et Bons de livraison.
-        2. Cliquez "Lancer la comparaison".
-        3. Consultez les détails par commande et téléchargez le rapport Excel.
-        """)
+        st.markdown("1. Téléversez vos PDF: Commandes et Bons de livraison.\n2. Cliquez 'Lancer la comparaison'.\n3. Consultez et téléchargez le rapport Excel.")
     with st.expander("📊 Comprendre les résultats"):
-        st.markdown("""
-        - ✅ OK : Quantité commandée = Quantité livrée
-        - ⚠️ QTY_DIFF : Différence de quantité
-        - ❌ MISSING_IN_BL : Article non trouvé dans le BL
-        """)
+        st.markdown("- ✅ OK : Quantité commandée = Quantité livrée\n- ⚠️ QTY_DIFF : Différence de quantité\n- ❌ MISSING_IN_BL : Article non trouvé dans le BL")
     if st.button("✅ Compris, retour à l'outil", type="primary"):
         st.session_state.show_help = False
         st.rerun()
 
-st.markdown("<div style='text-align:center; margin-top:40px; font-size:18px; color:#888;'>⭐⭐⭐⭐⭐ Powered by IC - 2025</div>", unsafe_allow_html=True)
+st.markdown("<div style='text-align:center; margin-top:40px; font-size:18px; color:#888;'>⭐ Powered by IC - 2025</div>", unsafe_allow_html=True)
