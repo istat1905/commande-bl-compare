@@ -117,8 +117,8 @@ if "user_role" not in st.session_state:
 
 # Base de données utilisateurs simulée (À REMPLACER par vraie BDD)
 USERS_DB = {
-    "admin": {"password": "admin123", "role": "admin", "web_access": True},
-    "user1": {"password": "user123", "role": "user", "web_access": False},
+    "ISA": {"password": "admin123", "role": "admin", "web_access": True},
+    "bak": {"password": "bak123", "role": "user", "web_access": False},
 }
 
 def check_password(username, password):
@@ -151,7 +151,7 @@ if not st.session_state.authenticated:
                 else:
                     st.error("❌ Identifiant ou mot de passe incorrect")
         
-        st.info("💡 **Demo**: admin / admin123 ou user1 / user123")
+        st.info("💡 **Demo**: BAK / Bak123")
     st.stop()
 
 st.markdown('<h1 class="main-header">🧾 Comparateur pour DESADV</h1>', unsafe_allow_html=True)
