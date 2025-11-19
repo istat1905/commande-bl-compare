@@ -115,15 +115,27 @@ if "user_role" not in st.session_state:
 
 # Base de données utilisateurs simulée (À REMPLACER par vraie BDD)
 USERS_DB = {
-    "ISA": {"password": "admin123", "role": "admin", "web_access": True},
-    "bak": {"password": "bak123", "role": "user", "web_access": False},
+    "admin": {"password": "admin123", "role": "admin"},
+    "user1": {"password": "user123", "role": "user"},
 }
 
 def check_password(username, password):
     """Vérifie les identifiants utilisateur"""
     if username in USERS_DB and USERS_DB[username]["password"] == password:
-        return True, USERS_DB[username]["role"], USERS_DB[username]["web_access"]
-    return False, None, False
+        return True, USERS_DB[username]["role"]
+    return False, None
+
+def save_user(username, password, role):
+    """Ajoute ou modifie un utilisateur"""
+    USERS_DB[username] = {"password": password, "role": role}
+    return True
+
+def delete_user(username):
+    """Supprime un utilisateur"""
+    if username in USERS_DB and username != "admin":
+        del USERS_DB[username]
+        return True
+    return False
 
 # Page de connexion si non authentifié
 if not st.session_state.authenticated:
@@ -138,18 +150,17 @@ if not st.session_state.authenticated:
             submit = st.form_submit_button("Se connecter", use_container_width=True, type="primary")
             
             if submit:
-                is_valid, role, web_access = check_password(username, password)
+                is_valid, role = check_password(username, password)
                 if is_valid:
                     st.session_state.authenticated = True
                     st.session_state.user_role = role
-                    st.session_state.user_web_access = web_access
                     st.session_state.username = username
                     st.success(f"✅ Bienvenue {username} !")
                     st.rerun()
                 else:
                     st.error("❌ Identifiant ou mot de passe incorrect")
         
-        st.info("💡 **Demo**: BAK / Bak123")
+        st.info("💡 **Demo**: admin / admin123 ou user1 / user123")
     st.stop()
 
 st.markdown('<h1 class="main-header">🧾 Comparateur pour DESADV</h1>', unsafe_allow_html=True)
@@ -286,13 +297,13 @@ def calculate_service_rate(qte_cmd, qte_bl):
     return min((qte_bl / qte_cmd) * 100, 100)
 
 with st.sidebar:
-    st.header("📁 Fichiers")
+    # Nom utilisateur en haut
+    st.markdown(f"### 👤 {st.session_state.username}")
+    st.caption(f"Rôle: {st.session_state.user_role}")
     
-    # Bouton déconnexion
     if st.button("🚪 Déconnexion", use_container_width=True):
         st.session_state.authenticated = False
         st.session_state.user_role = None
-        st.session_state.user_web_access = False
         st.session_state.username = None
         st.rerun()
     
@@ -303,7 +314,10 @@ with st.sidebar:
         st.session_state.key_bl = f"bl_{time.time()}"
         st.session_state.historique = []
         st.rerun()
+    
     st.markdown("---")
+    st.header("📁 Fichiers")
+    
     commande_files = st.file_uploader(
         "📦 PDF(s) Commande client", 
         type="pdf", 
@@ -316,6 +330,7 @@ with st.sidebar:
         accept_multiple_files=True,
         key=st.session_state.key_bl
     )
+    
     st.markdown("---")
     st.header("⚙️ Options")
     hide_unmatched = st.checkbox(
@@ -323,6 +338,7 @@ with st.sidebar:
         value=True,
         help="Exclut les articles MISSING_IN_BL de l'export Excel"
     )
+    
     st.markdown("---")
     st.header("📊 Historique")
     if st.session_state.historique:
@@ -334,16 +350,29 @@ with st.sidebar:
     else:
         st.info("Aucune comparaison enregistrée")
     
-    # NOTE: La vérification DESADV (scraping/web) a été supprimée de cette version.
-    st.markdown("---")
-    st.info("🔕 Vérification DESADV désactivée dans cette version de l'application.")
+    # Gestion utilisateurs (Admin uniquement)
+    if st.session_state.user_role == "admin":
+        st.markdown("---")
+        st.header("👥 Gestion utilisateurs")
+        if st.button("⚙️ Gérer les utilisateurs", use_container_width=True):
+            st.session_state.show_help = "manage_users"
+            st.rerun()
     
     st.markdown("---")
     if st.button("❓ Comment utiliser", use_container_width=True):
         st.session_state.show_help = "guide"
         st.rerun()
 
-if st.button("🔍 Lancer la comparaison", use_container_width=True, type="primary"):
+# Boutons principaux avec disposition optimisée
+col1, col2 = st.columns([4, 1])
+with col1:
+    launch_button = st.button("🔍 Lancer la comparaison", use_container_width=True, type="primary")
+with col2:
+    if st.button("❓ Aide", use_container_width=True):
+        st.session_state.show_help = "guide"
+        st.rerun()
+
+if launch_button:
     if not commande_files or not bl_files:
         st.error("⚠️ Veuillez téléverser des commandes ET des bons de livraison.")
         st.stop()
@@ -676,8 +705,78 @@ if st.session_state.historique:
 else:
     st.info("👆 Téléversez vos fichiers et lancez la comparaison pour commencer")
 
-# Modal d'aide / Configuration
-if st.session_state.show_help == "guide":
+# Modal d'aide / Configuration / Gestion utilisateurs
+if st.session_state.show_help == "manage_users":
+    st.markdown("---")
+    st.markdown("## 👥 Gestion des utilisateurs")
+    
+    if st.session_state.user_role != "admin":
+        st.error("🔒 Accès refusé")
+        st.stop()
+    
+    tabs = st.tabs(["📋 Liste", "➕ Ajouter", "✏️ Modifier"])
+    
+    with tabs[0]:
+        st.markdown("### Liste des utilisateurs")
+        users_data = []
+        for username, data in USERS_DB.items():
+            users_data.append({
+                "Utilisateur": username,
+                "Rôle": data["role"]
+            })
+        df_users = pd.DataFrame(users_data)
+        st.dataframe(df_users, use_container_width=True, hide_index=True)
+        
+        st.markdown("---")
+        st.markdown("### Supprimer un utilisateur")
+        user_to_delete = st.selectbox("Sélectionner un utilisateur", [u for u in USERS_DB.keys() if u != "admin"])
+        if st.button("🗑️ Supprimer", type="secondary"):
+            if delete_user(user_to_delete):
+                st.success(f"✅ Utilisateur {user_to_delete} supprimé")
+                time.sleep(1)
+                st.rerun()
+    
+    with tabs[1]:
+        st.markdown("### Ajouter un utilisateur")
+        with st.form("add_user"):
+            new_username = st.text_input("👤 Nom d'utilisateur")
+            new_password = st.text_input("🔒 Mot de passe", type="password")
+            new_role = st.selectbox("Rôle", ["user", "admin"])
+            
+            if st.form_submit_button("➕ Ajouter", type="primary"):
+                if new_username and new_password:
+                    if new_username in USERS_DB:
+                        st.error("❌ Cet utilisateur existe déjà")
+                    else:
+                        save_user(new_username, new_password, new_role)
+                        st.success(f"✅ Utilisateur {new_username} ajouté")
+                        time.sleep(1)
+                        st.rerun()
+                else:
+                    st.error("⚠️ Veuillez remplir tous les champs")
+    
+    with tabs[2]:
+        st.markdown("### Modifier un utilisateur")
+        user_to_edit = st.selectbox("Sélectionner", list(USERS_DB.keys()))
+        
+        if user_to_edit:
+            current_data = USERS_DB[user_to_edit]
+            with st.form("edit_user"):
+                edit_password = st.text_input("🔒 Nouveau mot de passe (laisser vide pour ne pas changer)", type="password")
+                edit_role = st.selectbox("Rôle", ["user", "admin"], index=0 if current_data["role"] == "user" else 1)
+                
+                if st.form_submit_button("💾 Sauvegarder", type="primary"):
+                    new_pwd = edit_password if edit_password else current_data["password"]
+                    save_user(user_to_edit, new_pwd, edit_role)
+                    st.success(f"✅ Utilisateur {user_to_edit} modifié")
+                    time.sleep(1)
+                    st.rerun()
+    
+    if st.button("↩️ Retour", type="secondary"):
+        st.session_state.show_help = False
+        st.rerun()
+
+elif st.session_state.show_help == "guide":
     st.markdown("---")
     st.markdown("## 📖 Guide d'utilisation")
     
