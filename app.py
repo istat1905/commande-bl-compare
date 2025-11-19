@@ -682,9 +682,10 @@ def fetch_desadv_from_auchan():
     return result, date
 
 with st.sidebar:
-    st.header("📁 Fichiers")
+    # Nom utilisateur en haut
+    st.markdown(f"### 👤 {st.session_state.username}")
+    st.caption(f"Rôle: {st.session_state.user_role}")
     
-    # Bouton déconnexion
     if st.button("🚪 Déconnexion", use_container_width=True):
         st.session_state.authenticated = False
         st.session_state.user_role = None
@@ -699,7 +700,10 @@ with st.sidebar:
         st.session_state.key_bl = f"bl_{time.time()}"
         st.session_state.historique = []
         st.rerun()
+    
     st.markdown("---")
+    st.header("📁 Fichiers")
+    
     commande_files = st.file_uploader(
         "📦 PDF(s) Commande client", 
         type="pdf", 
@@ -712,6 +716,7 @@ with st.sidebar:
         accept_multiple_files=True,
         key=st.session_state.key_bl
     )
+    
     st.markdown("---")
     st.header("⚙️ Options")
     hide_unmatched = st.checkbox(
@@ -719,6 +724,7 @@ with st.sidebar:
         value=True,
         help="Exclut les articles MISSING_IN_BL de l'export Excel"
     )
+    
     st.markdown("---")
     st.header("📊 Historique")
     if st.session_state.historique:
@@ -730,41 +736,58 @@ with st.sidebar:
     else:
         st.info("Aucune comparaison enregistrée")
     
+    # Gestion utilisateurs (Admin uniquement)
+    if st.session_state.user_role == "admin":
+        st.markdown("---")
+        st.header("👥 Gestion utilisateurs")
+        if st.button("⚙️ Gérer les utilisateurs", use_container_width=True):
+            st.session_state.show_help = "manage_users"
+            st.rerun()
+    
     # Section DESADV (uniquement si accès web autorisé)
     if st.session_state.user_web_access:
         st.markdown("---")
         st.header("🌐 Vérification DESADV")
         
-        if st.button("🔍 Vérifier les DESADV du jour", use_container_width=True, type="secondary"):
-            with st.spinner("Connexion à Auchan ATGPED..."):
-                time.sleep(1.5)
-                desadv_list, date_livraison = fetch_desadv_from_auchan()
-                st.session_state.desadv_data = desadv_list
-                st.session_state.desadv_date = date_livraison
+        from datetime import timedelta
+        
+        date_options = {
+            "Demain": (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y"),
+            "Aujourd'hui": datetime.now().strftime("%d/%m/%Y"),
+            "Hier": (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y"),
+        }
+        
+        selected_date_label = st.selectbox("📅 Date de livraison", list(date_options.keys()), index=0)
+        selected_date = date_options[selected_date_label]
+        
+        if st.button("🔍 Vérifier les DESADV", use_container_width=True, type="secondary"):
+            with st.spinner("Connexion aux sites..."):
+                time.sleep(1)
+                all_results = fetch_all_desadv(selected_date)
+                st.session_state.desadv_data = all_results
+                st.session_state.desadv_date = selected_date
             st.rerun()
         
         if hasattr(st.session_state, 'desadv_data') and st.session_state.desadv_data:
-            nb_total = len(st.session_state.desadv_data)
-            montant_total = sum([d["montant_total"] for d in st.session_state.desadv_data])
+            auchan = st.session_state.desadv_data.get("auchan", [])
+            edi1 = st.session_state.desadv_data.get("edi1", [])
+            total = len(auchan) + len(edi1)
             
-            st.success(f"✅ **{nb_total} DESADV** à faire pour le {st.session_state.desadv_date}")
-            st.metric("Montant total", f"{montant_total:,.2f} €")
-            
-            with st.expander("📋 Détails des DESADV", expanded=True):
-                for idx, desadv in enumerate(st.session_state.desadv_data, 1):
-                    st.markdown(f"""
-                    **{idx}. {desadv['entrepot']}**  
-                    💰 Montant: **{desadv['montant_total']:,.2f} €**  
-                    📦 {desadv['nb_commandes']} commande(s): {', '.join(desadv['commandes'])}
-                    """)
-                    st.markdown("---")
-            
-            if st.button("🗑️ Effacer les notifications", use_container_width=True):
-                st.session_state.desadv_data = []
-                st.rerun()
+            if total > 0:
+                st.success(f"✅ **{total} DESADV** trouvés")
+                st.caption(f"📅 {st.session_state.desadv_date}")
+                
+                if auchan:
+                    st.markdown(f"**Auchan:** {len(auchan)}")
+                if edi1:
+                    st.markdown(f"**EDI1:** {len(edi1)}")
+                
+                if st.button("🗑️ Effacer", use_container_width=True):
+                    st.session_state.desadv_data = {}
+                    st.rerun()
     else:
         st.markdown("---")
-        st.info("🔒 Vérification DESADV\nAccès non autorisé pour votre compte")
+        st.info("🔒 Vérification DESADV\nAccès non autorisé")
     
     st.markdown("---")
     if st.button("❓ Comment utiliser", use_container_width=True):
