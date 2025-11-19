@@ -1,11 +1,14 @@
+# app.py
 import streamlit as st
 import pdfplumber
 import pandas as pd
 import io
 import re
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
+import base64
+import os
 
 try:
     import plotly.express as px
@@ -13,93 +16,47 @@ try:
     PLOTLY_AVAILABLE = True
 except ImportError:
     PLOTLY_AVAILABLE = False
-    st.warning("⚠️ Plotly non installé. Les graphiques ne seront pas affichés.")
 
-import base64
-
+# ----------------------
+# CONFIG / CSS / LOGO
+# ----------------------
 st.set_page_config(
     page_title="DESATHOR",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Logo plus haut
 st.markdown("""
 <style>
-    .logo-container {
-        display: flex;
-        justify-content: center;
-        margin-top: 10px;
-        margin-bottom: 20px;
-    }
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: 700;
-        color: #1f77b4;
-        margin-bottom: 0.5rem;
-    }
-    .subtitle {
-        font-size: 1.1rem;
-        color: #666;
-        margin-bottom: 2rem;
-    }
-    .kpi-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 1.5rem;
-        border-radius: 10px;
-        color: white;
-        text-align: center;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    .kpi-value {
-        font-size: 2.5rem;
-        font-weight: bold;
-        margin: 0.5rem 0;
-    }
-    .kpi-label {
-        font-size: 0.9rem;
-        opacity: 0.9;
-    }
-    .success-card {
-        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-    }
-    .warning-card {
-        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-    }
-    .info-card {
-        background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-    }
-    .help-button {
-        position: fixed;
-        bottom: 20px;
-        right: 20px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 15px 25px;
-        border-radius: 50px;
-        font-size: 16px;
-        font-weight: bold;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-        cursor: pointer;
-        z-index: 999;
-        border: none;
-    }
+    .logo-container { display: flex; justify-content: center; margin-top: 10px; margin-bottom: 20px; }
+    .main-header { font-size: 2.5rem; font-weight: 700; color: #1f77b4; margin-bottom: 0.5rem; }
+    .subtitle { font-size: 1.1rem; color: #666; margin-bottom: 2rem; }
+    .kpi-card { background: linear-gradient(135deg,#667eea 0%,#764ba2 100%); padding:1.5rem; border-radius:10px; color:white; text-align:center; box-shadow:0 4px 6px rgba(0,0,0,0.1); }
+    .kpi-value { font-size:2.5rem; font-weight:bold; margin:0.5rem 0; }
+    .kpi-label { font-size:0.9rem; opacity:0.9; }
+    .success-card { background: linear-gradient(135deg,#11998e 0%,#38ef7d 100%); }
+    .warning-card { background: linear-gradient(135deg,#f093fb 0%,#f5576c 100%); }
+    .info-card { background: linear-gradient(135deg,#4facfe 0%,#00f2fe 100%); }
 </style>
 """, unsafe_allow_html=True)
 
-with open("Desathor.png", "rb") as f:
-    data = f.read()
-encoded = base64.b64encode(data).decode()
+# Try to load logo; if fail, show nothing (no crash)
+logo_path = "Desathor.png"
+if os.path.exists(logo_path):
+    try:
+        with open(logo_path, "rb") as f:
+            data = f.read()
+        encoded = base64.b64encode(data).decode()
+        st.markdown(
+            f"""<div class="logo-container"><img src="data:image/png;base64,{encoded}" style="width:250px; max-width:80%; height:auto;"></div>""",
+            unsafe_allow_html=True
+        )
+    except Exception:
+        pass
 
-st.markdown(
-    f"""
-    <div class="logo-container">
-        <img src="data:image/png;base64,{encoded}" style="width:250px; max-width:80%; height:auto;">
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
+# ----------------------
+# SESSION STATE INIT
+# ----------------------
 if 'historique' not in st.session_state:
     st.session_state.historique = []
 if "key_cmd" not in st.session_state:
@@ -115,71 +72,71 @@ if "authenticated" not in st.session_state:
 if "user_role" not in st.session_state:
     st.session_state.user_role = None
 
-# Base de données utilisateurs simulée (À REMPLACER par vraie BDD)
+# ----------------------
+# UTIL: Utilitaires divers
+# ----------------------
+def parse_number_fr(text):
+    """Convertit '1 234,56' ou '1234.56' -> float"""
+    if text is None:
+        return 0.0
+    txt = str(text).strip()
+    txt = txt.replace("\u202f", "").replace("\xa0", "").replace(" ", "")
+    txt = txt.replace(",", ".")
+    txt = re.sub(r"[^\d\.-]", "", txt)
+    try:
+        return float(txt) if txt != "" else 0.0
+    except:
+        return 0.0
+
+# ----------------------
+# USERS DB (DEMO)
+# ----------------------
+# En production remplacez par vraie base avec hash bcrypt
 USERS_DB = {
-    "ISA": {"password": "admin123", "role": "admin", "web_access": True},
-    "bak": {"password": "bak123", "role": "user", "web_access": False},
+    "admin": {"password": "admin123", "role": "admin", "web_access": True},
+    "user1": {"password": "user123", "role": "user", "web_access": False},
 }
 
 def check_password(username, password):
-    """Vérifie les identifiants utilisateur"""
     if username in USERS_DB and USERS_DB[username]["password"] == password:
         return True, USERS_DB[username]["role"], USERS_DB[username]["web_access"]
     return False, None, False
 
-# Page de connexion si non authentifié
-if not st.session_state.authenticated:
-    st.markdown("---")
-    st.markdown("### 🔐 Connexion requise")
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        with st.form("login_form"):
-            username = st.text_input("👤 Identifiant")
-            password = st.text_input("🔒 Mot de passe", type="password")
-            submit = st.form_submit_button("Se connecter", use_container_width=True, type="primary")
-            
-            if submit:
-                is_valid, role, web_access = check_password(username, password)
-                if is_valid:
-                    st.session_state.authenticated = True
-                    st.session_state.user_role = role
-                    st.session_state.user_web_access = web_access
-                    st.session_state.username = username
-                    st.success(f"✅ Bienvenue {username} !")
-                    st.rerun()
-                else:
-                    st.error("❌ Identifiant ou mot de passe incorrect")
-        
-        st.info("💡 **Demo**: BAK / Bak123")
-    st.stop()
-
-st.markdown('<h1 class="main-header">🧾 Comparateur pour DESADV</h1>', unsafe_allow_html=True)
-st.markdown(f'<p class="subtitle">Bienvenue {st.session_state.username} ({st.session_state.user_role}) | Analysez vos commandes et bons de livraison en quelques clics</p>', unsafe_allow_html=True)
-
-def find_order_numbers_in_text(text):
-    if not text:
-        return []
-    patterns = [
-        r"Commande\s*n[°º]?\s*[:\s-]*?(\d{5,10})",
-        r"N[°º]?\s*commande\s*[:\s-]*?(\d{5,10})",
-        r"Bon\s+de\s+Livraison\s+Nr\.?\s*[:\s-]*?(\d{5,10})",
-    ]
-    found = []
-    for pat in patterns:
-        for m in re.finditer(pat, text, flags=re.IGNORECASE):
-            num = m.group(1)
-            if num and num not in found:
-                found.append(num)
-    return found
-
-def is_valid_ean13(code):
-    if not code or len(code) != 13:
-        return False
-    if code.startswith(('302', '376')):
-        return False
+def save_user(username, password, role, web_access):
+    USERS_DB[username] = {"password": password, "role": role, "web_access": web_access}
     return True
 
+def delete_user(username):
+    if username in USERS_DB and username != "admin":
+        del USERS_DB[username]
+        return True
+    return False
+
+# ----------------------
+# EAN13 validation
+# ----------------------
+def is_valid_ean13(code):
+    """Vérifie longueur, chiffres et checksum EAN13 (retourne False si invalid ou préfixes exclus)."""
+    if not code:
+        return False
+    s = re.sub(r"\D", "", str(code))
+    if len(s) != 13:
+        return False
+    # optional prefix exclusion (conservez si vous voulez)
+    if s.startswith(('302', '376')):
+        return False
+    # checksum
+    digits = [int(c) for c in s]
+    checksum = digits[-1]
+    evens = sum(digits[-2::-2])  # positions from right, every 2
+    odds = sum(digits[-3::-2])
+    total = odds + evens * 3
+    calc = (10 - (total % 10)) % 10
+    return calc == checksum
+
+# ----------------------
+# PDF EXTRACTION (commande / BL)
+# ----------------------
 def extract_records_from_command_pdf(pdf_file):
     records = []
     full_text = ""
@@ -191,46 +148,58 @@ def extract_records_from_command_pdf(pdf_file):
                 txt = page.extract_text() or ""
                 full_text += "\n" + txt
                 lines = txt.split("\n")
-                for i, ligne in enumerate(lines):
-                    order_nums = find_order_numbers_in_text(ligne)
+                for ligne in lines:
+                    # find order numbers with robust patterns
+                    order_nums = []
+                    for pat in [
+                        r"Commande\s*n[°º]?\s*[:\s-]*?(\d{4,12})",
+                        r"N[°º]?\s*commande\s*[:\s-]*?(\d{4,12})",
+                        r"Bon\s+de\s+Livraison\s+Nr\.?\s*[:\s-]*?(\d{4,12})",
+                        r"Commande[:\s]*#?(\d{4,12})",
+                        r"Commande\s*[:\s]*(\d{4,12})"
+                    ]:
+                        m = re.search(pat, ligne, flags=re.IGNORECASE)
+                        if m:
+                            order_nums.append(m.group(1))
                     if order_nums:
                         current_order = order_nums[0]
-                    if re.search(r"^L\s+Réf\.\s*frn\s+Code\s+ean", ligne, re.IGNORECASE):
-                        in_data_section = True
-                        continue
-                    if re.search(r"^Récapitulatif|^Page\s+\d+", ligne, re.IGNORECASE):
-                        in_data_section = False
-                        continue
-                    if not in_data_section:
-                        continue
+
+                    # heuristique simple: si ligne contient EAN 13 valide, récupérer
                     ean_matches = re.findall(r"\b(\d{13})\b", ligne)
                     valid_eans = [ean for ean in ean_matches if is_valid_ean13(ean)]
                     if not valid_eans:
                         continue
                     ean = valid_eans[0]
-                    parts = ligne.split()
-                    ean_pos = None
-                    for idx, part in enumerate(parts):
-                        if ean in part:
-                            ean_pos = idx
-                            break
-                    ref_frn = None
-                    code_article = ""
-                    if ean_pos and ean_pos > 1:
-                        candidate = parts[ean_pos - 1]
-                        if re.match(r"^\d{3,6}$", candidate):
-                            code_article = candidate
-                            ref_frn = candidate
-                    qty_match = re.search(r"Conditionnement\s*:\s*\d+\s+\d+(\d+)\s+(\d+)", ligne)
-                    if qty_match:
-                        qte = int(qty_match.group(1))
-                    else:
-                        nums = re.findall(r"\b(\d+)\b", ligne)
-                        nums = [int(n) for n in nums if n != ean and len(n) < 6]
+
+                    # qté: chercher "Qté", "QTE", "Qty", "Quantité", ou dernier nombre plausible
+                    qte = None
+                    m = re.search(r"(?:Qt[eé]e|QTE|Qty|Quantit[eé])\s*[:\-]?\s*([0-9]+(?:[.,][0-9]+)?)", ligne, flags=re.IGNORECASE)
+                    if m:
+                        try:
+                            qte = int(float(m.group(1).replace(",", ".")))
+                        except:
+                            qte = None
+                    if qte is None:
+                        # fallback: prendre dernier integer < 100000
+                        nums = re.findall(r"\b(\d{1,6})\b", ligne)
+                        nums = [int(n) for n in nums if len(n) < 7]
                         if nums:
-                            qte = nums[-2] if len(nums) >= 2 else nums[-1]
-                        else:
-                            continue
+                            # try to pick number not EAN and likely not code article (heuristic)
+                            qte = nums[-1]
+                    if qte is None:
+                        continue
+
+                    # code article/ref fournisseur: chercher groupe avant l'ean si numérique court
+                    parts = ligne.split()
+                    code_article = ""
+                    for i, p in enumerate(parts):
+                        if ean in p:
+                            if i > 0:
+                                cand = re.sub(r"\D", "", parts[i-1])
+                                if 2 <= len(cand) <= 6:
+                                    code_article = cand
+                            break
+
                     records.append({
                         "ref": ean,
                         "code_article": code_article,
@@ -240,7 +209,13 @@ def extract_records_from_command_pdf(pdf_file):
     except Exception as e:
         st.error(f"Erreur lecture PDF commande: {e}")
         return {"records": [], "order_numbers": [], "full_text": ""}
-    order_numbers = find_order_numbers_in_text(full_text)
+    order_numbers = []
+    for pat in [r"(\d{4,12})"]:
+        for m in re.finditer(pat, full_text):
+            # not strict; keep only numbers near words "Commande"
+            pass
+    # keep prior approach for order numbers using find_order_numbers_in_text logic
+    order_numbers = re.findall(r"\b\d{4,12}\b", full_text)
     return {"records": records, "order_numbers": order_numbers, "full_text": full_text}
 
 def extract_records_from_bl_pdf(pdf_file):
@@ -253,22 +228,41 @@ def extract_records_from_bl_pdf(pdf_file):
                 txt = page.extract_text() or ""
                 full_text += "\n" + txt
                 for ligne in txt.split("\n"):
-                    order_nums = find_order_numbers_in_text(ligne)
+                    # find order numbers
+                    order_nums = []
+                    for pat in [
+                        r"Commande\s*n[°º]?\s*[:\s-]*?(\d{4,12})",
+                        r"N[°º]?\s*commande\s*[:\s-]*?(\d{4,12})",
+                        r"Bon\s+de\s+Livraison\s+Nr\.?\s*[:\s-]*?(\d{4,12})",
+                        r"Commande[:\s]*#?(\d{4,12})",
+                    ]:
+                        m = re.search(pat, ligne, flags=re.IGNORECASE)
+                        if m:
+                            order_nums.append(m.group(1))
                     if order_nums:
                         current_order = order_nums[0]
+
                     ean_matches = re.findall(r"\b(\d{13})\b", ligne)
                     valid_eans = [ean for ean in ean_matches if is_valid_ean13(ean)]
                     if not valid_eans:
                         continue
                     ean = valid_eans[0]
-                    nums = re.findall(r"[\d,.]+", ligne)
+
+                    # qte: try Qty labels or last numeric with decimals
                     qte = None
-                    if nums:
-                        candidate = nums[-2] if len(nums) >= 2 else nums[-1]
+                    m = re.search(r"(?:Qt[eé]e|QTE|Qty|Quantit[eé])\s*[:\-]?\s*([0-9]+(?:[.,][0-9]+)?)", ligne, flags=re.IGNORECASE)
+                    if m:
                         try:
-                            qte = float(candidate.replace(",", "."))
+                            qte = float(m.group(1).replace(",", "."))
                         except:
-                            continue
+                            qte = None
+                    if qte is None:
+                        nums = re.findall(r"([0-9]+(?:[.,][0-9]+)?)", ligne)
+                        if nums:
+                            try:
+                                qte = float(nums[-1].replace(",", "."))
+                            except:
+                                continue
                     if qte is None:
                         continue
                     records.append({
@@ -279,232 +273,340 @@ def extract_records_from_bl_pdf(pdf_file):
     except Exception as e:
         st.error(f"Erreur lecture PDF BL: {e}")
         return {"records": [], "order_numbers": [], "full_text": ""}
-    order_numbers = find_order_numbers_in_text(full_text)
+    order_numbers = re.findall(r"\b\d{4,12}\b", full_text)
     return {"records": records, "order_numbers": order_numbers, "full_text": full_text}
 
-def calculate_service_rate(qte_cmd, qte_bl):
-    if pd.isna(qte_bl) or qte_cmd == 0:
-        return 0
-    return min((qte_bl / qte_cmd) * 100, 100)
+# ----------------------
+# SCRAPING DESADV (Auchan & EDI1) - robust functions
+# ----------------------
+import requests
+from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-def fetch_desadv_from_auchan_real():
+def robust_session(retries=3, backoff_factor=0.3, status_forcelist=(500,502,503,504)):
+    s = requests.Session()
+    retry = Retry(total=retries, read=retries, connect=retries,
+                  backoff_factor=backoff_factor, status_forcelist=status_forcelist)
+    adapter = HTTPAdapter(max_retries=retry)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    })
+    return s
+
+def _find_column_indices(table):
+    header = None
+    for tr in table.find_all("tr"):
+        ths = tr.find_all(['th','td'])
+        if ths and len(ths) > 1:
+            header = [ (th.get_text(" ", strip=True).lower()) for th in ths ]
+            break
+    indices = {'numero': None, 'entrepot': None, 'date': None, 'montant': None}
+    if not header:
+        return indices
+    for i, h in enumerate(header):
+        if indices['numero'] is None and any(k in h for k in ['num', 'n°', 'numero', 'no commande', 'commande']):
+            indices['numero'] = i
+        if indices['entrepot'] is None and any(k in h for k in ['livrer', 'livrer à', 'livrer a', 'livraison', 'adresse livraison', 'livré à']):
+            indices['entrepot'] = i
+        if indices['date'] is None and any(k in h for k in ['livrer le', 'livrer', 'date', 'livraison']):
+            indices['date'] = i
+        if indices['montant'] is None and 'montant' in h:
+            indices['montant'] = i
+    if indices['numero'] is None:
+        indices['numero'] = 0
+    return indices
+
+def fetch_desadv_from_auchan_real(target_date, min_amount=850.0, username=None, password=None, timeout=15):
     """
-    Connexion RÉELLE au site Auchan ATGPED
-    Récupère les commandes à livrer demain avec montant >= 850€
+    target_date: str 'dd/mm/YYYY'
+    retourne dict {'error': None, 'data': [...] } ou {'error': '...', 'data': []}
     """
     try:
-        import requests
-        from bs4 import BeautifulSoup
-        from datetime import timedelta
-        import os
-        
-        # Date de demain
-        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
-        
-        # Créer une session
-        session = requests.Session()
-        
-        # 1. CONNEXION
-        # Les identifiants doivent être stockés dans les variables d'environnement
-        # Pour Streamlit Cloud: Settings > Secrets > Add secrets
-        login_url = "https://auchan.atgped.net/gui.php"
-        
-        # Récupérer les credentials depuis les secrets Streamlit
-        try:
-            username = st.secrets["AUCHAN_USERNAME"]
-            password = st.secrets["AUCHAN_PASSWORD"]
-        except:
-            # Fallback pour test local
-            username = os.getenv("AUCHAN_USERNAME", "")
-            password = os.getenv("AUCHAN_PASSWORD", "")
-        
+        if username is None or password is None:
+            try:
+                username = st.secrets["AUCHAN_USERNAME"]
+                password = st.secrets["AUCHAN_PASSWORD"]
+            except Exception:
+                username = os.getenv("AUCHAN_USERNAME", "")
+                password = os.getenv("AUCHAN_PASSWORD", "")
+
         if not username or not password:
-            st.error("⚠️ Identifiants Auchan non configurés. Contactez l'administrateur.")
-            return [], tomorrow
-        
-        # Authentification
-        login_data = {
+            return {"error": "credentials_missing", "data": []}
+
+        session = robust_session()
+        login_url = "https://auchan.atgped.net/gui.php"
+        r = session.get(login_url, timeout=timeout)
+        if r.status_code != 200:
+            return {"error": f"login_page_status_{r.status_code}", "data": [], "html": r.text[:4000]}
+
+        soup = BeautifulSoup(r.content, "html.parser")
+        payload = {}
+        for inp in soup.select("input[type=hidden]"):
+            name = inp.get("name")
+            if name:
+                payload[name] = inp.get("value", "")
+
+        payload.update({
             "username": username,
             "password": password,
             "action": "login"
-        }
-        
-        login_response = session.post(login_url, data=login_data)
-        
-        if "Liste des commandes" not in login_response.text and "Documents" not in login_response.text:
-            st.error("❌ Échec de connexion à Auchan ATGPED")
-            return [], tomorrow
-        
-        # 2. RÉCUPÉRER LA LISTE DES COMMANDES
-        commandes_url = "https://auchan.atgped.net/gui.php"
+        })
+        r2 = session.post(login_url, data=payload, headers={"Referer": login_url}, timeout=timeout, allow_redirects=True)
+        if r2.status_code >= 400:
+            return {"error": f"login_post_status_{r2.status_code}", "data": [], "html": r2.text[:4000]}
+
+        txt2 = r2.text.lower()
+        if not any(k in txt2 for k in ["liste des commandes", "documents", "logout", "déconnexion", "deconnexion"]):
+            # save sample html for debug
+            return {"error": "login_failed", "data": [], "html": r2.text[:4000]}
+
+        commandes_url = login_url
         params = {
             "query": "documents_commandes_liste",
             "page": "documents_commandes_liste",
             "pos": "0",
             "acces_page": "1",
-            "lines_per_page": "1000",  # Récupérer max 1000 lignes
-            "doNumero": "",
-            "RaisonSocialeSiegeSoc": "",
-            "livrerA": "",
+            "lines_per_page": "1000",
         }
-        
-        response = session.get(commandes_url, params=params)
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # 3. PARSER LE TABLEAU
-        commandes_brutes = []
-        
-        # Trouver le tableau des commandes
-        table = soup.find('table')
+        r3 = session.get(commandes_url, params=params, timeout=timeout)
+        if r3.status_code != 200:
+            return {"error": f"commandes_page_status_{r3.status_code}", "data": [], "html": r3.text[:4000]}
+
+        soup3 = BeautifulSoup(r3.content, "html.parser")
+        table = soup3.find("table")
         if not table:
-            st.warning("⚠️ Aucune commande trouvée dans le tableau")
-            return [], tomorrow
-        
-        rows = table.find_all('tr')[1:]  # Skip header
-        
-        for row in rows:
-            cols = row.find_all('td')
-            if len(cols) < 7:
+            return {"error": "no_table_found", "data": [], "html": r3.text[:4000]}
+
+        idx = _find_column_indices(table)
+        rows = table.find_all("tr")
+        commandes_brutes = []
+        for row in rows[1:]:
+            cols = [td.get_text(" ", strip=True) for td in row.find_all("td")]
+            if not cols:
                 continue
-            
             try:
-                numero = cols[0].text.strip()
-                entrepot = cols[2].text.strip()  # Colonne "Livrer à"
-                date_livraison = cols[4].text.strip()  # Colonne "Livrer le"
-                montant_text = cols[6].text.strip()  # Colonne "Montant calculé"
-                
-                # Convertir le montant (format: "5432.70" ou "5 432.70")
-                montant = float(montant_text.replace(" ", "").replace(",", "."))
-                
-                # Filtrer par date de demain
-                if date_livraison == tomorrow:
-                    commandes_brutes.append({
-                        "numero": numero,
-                        "entrepot": entrepot,
-                        "montant": montant,
-                        "date_livraison": date_livraison
-                    })
-            except Exception as e:
+                numero = cols[idx['numero']] if idx['numero'] is not None and idx['numero'] < len(cols) else cols[0]
+                entrepot = cols[idx['entrepot']] if idx['entrepot'] is not None and idx['entrepot'] < len(cols) else (cols[2] if len(cols) > 2 else "")
+                date_livraison = cols[idx['date']] if idx['date'] is not None and idx['date'] < len(cols) else ""
+                montant_text = cols[idx['montant']] if idx['montant'] is not None and idx['montant'] < len(cols) else (cols[-1] if cols else "")
+                if date_livraison.strip() != target_date:
+                    continue
+                montant = parse_number_fr(montant_text)
+                commandes_brutes.append({
+                    "numero": numero.strip(),
+                    "entrepot": entrepot.strip(),
+                    "montant": montant,
+                    "date_livraison": date_livraison.strip()
+                })
+            except Exception:
                 continue
-        
-        # 4. REGROUPER PAR ENTREPÔT ET ADDITIONNER
+
         entrepots = {}
         for cmd in commandes_brutes:
-            entrepot = cmd["entrepot"]
-            if entrepot not in entrepots:
-                entrepots[entrepot] = {"montant_total": 0, "commandes": []}
-            entrepots[entrepot]["montant_total"] += cmd["montant"]
-            entrepots[entrepot]["commandes"].append(cmd["numero"])
-        
-        # 5. FILTRER CEUX >= 850€
+            e = cmd["entrepot"]
+            entrepots.setdefault(e, {"montant_total": 0.0, "commandes": []})
+            entrepots[e]["montant_total"] += cmd["montant"]
+            entrepots[e]["commandes"].append(cmd["numero"])
+
         desadv_a_faire = []
         for entrepot, data in entrepots.items():
-            if data["montant_total"] >= 850:
+            if data["montant_total"] >= float(min_amount):
                 desadv_a_faire.append({
                     "entrepot": entrepot,
                     "montant_total": data["montant_total"],
                     "nb_commandes": len(data["commandes"]),
                     "commandes": data["commandes"]
                 })
-        
-        # Trier par montant décroissant
+
         desadv_a_faire.sort(key=lambda x: x["montant_total"], reverse=True)
-        
-        return desadv_a_faire, tomorrow
-        
+        return {"error": None, "data": desadv_a_faire}
+
     except Exception as e:
-        st.error(f"❌ Erreur lors de la connexion: {str(e)}")
-        return [], tomorrow
+        return {"error": f"exception:{str(e)}", "data": []}
 
-def fetch_desadv_from_auchan():
-    """
-    Version avec fallback: essaie la vraie connexion, sinon utilise simulation
-    """
-    # Essayer la vraie connexion
-    result, date = fetch_desadv_from_auchan_real()
-    
-    # Si échec ou pas de résultats, utiliser la simulation pour démo
-    if not result:
-        from datetime import timedelta
-        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
-        
-        # Données simulées basées sur votre capture d'écran
-        commandes_brutes = [
-            {"numero": "03385063", "entrepot": "PFI VENDENHEIM", "montant": 5432.70, "date_livraison": tomorrow},
-            {"numero": "03311038", "entrepot": "APPRO PFI LE COUDRAY", "montant": 3406.81, "date_livraison": tomorrow},
-            {"numero": "03401873", "entrepot": "PFI CARVIN", "montant": 3226.07, "date_livraison": tomorrow},
-            {"numero": "03216884", "entrepot": "PFI Le Pontet", "montant": 3018.19, "date_livraison": tomorrow},
-            {"numero": "03250180", "entrepot": "PFI Saint Ouen", "montant": 2902.82, "date_livraison": tomorrow},
-            {"numero": "03328847", "entrepot": "PFI Toussieu", "montant": 2417.31, "date_livraison": tomorrow},
-            {"numero": "03188291", "entrepot": "ALC PFI AIX EN PROVENCE", "montant": 1396.71, "date_livraison": tomorrow},
-            {"numero": "03129969", "entrepot": "APPRO PFI VALENCE", "montant": 978.82, "date_livraison": tomorrow},
-            {"numero": "03201385", "entrepot": "APPRO PFI IDF CHILLY", "montant": 893.07, "date_livraison": tomorrow},
-            {"numero": "03134203", "entrepot": "APPRO PFI COURNON", "montant": 718.87, "date_livraison": tomorrow},
-            {"numero": "03433110", "entrepot": "APPRO PFI NORD SAINT SAUVEUR", "montant": 657.28, "date_livraison": tomorrow},
-            {"numero": "03134614", "entrepot": "APPRO PFI COURNON", "montant": 223.85, "date_livraison": tomorrow},
-        ]
-        
+def fetch_desadv_from_edi1_real(target_date, allowed_entrepots=None, username=None, password=None, timeout=15):
+    try:
+        if allowed_entrepots is None:
+            allowed_entrepots = ['ALBY', 'DOLE', 'LUXEMONT']
+
+        if username is None or password is None:
+            try:
+                username = st.secrets["EDI1_USERNAME"]
+                password = st.secrets["EDI1_PASSWORD"]
+            except Exception:
+                username = os.getenv("EDI1_USERNAME", "")
+                password = os.getenv("EDI1_PASSWORD", "")
+
+        session = robust_session()
+        login_url = "https://edi1.atgpedi.net/gui.php"
+        r = session.get(login_url, timeout=timeout)
+        content = r.content
+        if username and password:
+            soup = BeautifulSoup(r.content, "html.parser")
+            payload = {}
+            for inp in soup.select("input[type=hidden]"):
+                name = inp.get("name")
+                if name:
+                    payload[name] = inp.get("value", "")
+            payload.update({"username": username, "password": password, "action": "login"})
+            r2 = session.post(login_url, data=payload, headers={"Referer": login_url}, timeout=timeout, allow_redirects=True)
+            if r2.status_code >= 400:
+                return {"error": f"edi1_login_status_{r2.status_code}", "data": [], "html": r2.text[:4000]}
+            content = r2.content
+
+        soup3 = BeautifulSoup(content, "html.parser")
+        table = soup3.find("table")
+        if not table:
+            return {"error": "no_table_found_edi1", "data": [], "html": soup3.prettify()[:4000]}
+
+        idx = _find_column_indices(table)
+        rows = table.find_all("tr")
+        commandes_brutes = []
+        for row in rows[1:]:
+            cols = [td.get_text(" ", strip=True) for td in row.find_all("td")]
+            if not cols:
+                continue
+            try:
+                numero = cols[idx['numero']] if idx['numero'] is not None and idx['numero'] < len(cols) else cols[0]
+                entrepot = cols[idx['entrepot']] if idx['entrepot'] is not None and idx['entrepot'] < len(cols) else (cols[2] if len(cols) > 2 else "")
+                date_livraison = cols[idx['date']] if idx['date'] is not None and idx['date'] < len(cols) else ""
+                if date_livraison.strip() != target_date:
+                    continue
+                eup = entrepot.upper()
+                allowed_match = False
+                for a in allowed_entrepots:
+                    if a.strip().upper() in eup:
+                        allowed_match = True
+                        break
+                if not allowed_match:
+                    continue
+                commandes_brutes.append({
+                    "numero": numero.strip(),
+                    "entrepot": entrepot.strip(),
+                    "date_livraison": date_livraison.strip()
+                })
+            except Exception:
+                continue
+
         entrepots = {}
         for cmd in commandes_brutes:
-            entrepot = cmd["entrepot"]
-            if entrepot not in entrepots:
-                entrepots[entrepot] = {"montant_total": 0, "commandes": []}
-            entrepots[entrepot]["montant_total"] += cmd["montant"]
-            entrepots[entrepot]["commandes"].append(cmd["numero"])
-        
+            e = cmd["entrepot"]
+            entrepots.setdefault(e, {"commandes": []})
+            entrepots[e]["commandes"].append(cmd["numero"])
+
         desadv_a_faire = []
         for entrepot, data in entrepots.items():
-            if data["montant_total"] >= 850:
-                desadv_a_faire.append({
-                    "entrepot": entrepot,
-                    "montant_total": data["montant_total"],
-                    "nb_commandes": len(data["commandes"]),
-                    "commandes": data["commandes"]
-                })
-        
-        desadv_a_faire.sort(key=lambda x: x["montant_total"], reverse=True)
-        return desadv_a_faire, tomorrow
-    
-    return result, date
+            desadv_a_faire.append({
+                "entrepot": entrepot,
+                "nb_commandes": len(data["commandes"]),
+                "commandes": data["commandes"]
+            })
+        return {"error": None, "data": desadv_a_faire}
+    except Exception as e:
+        return {"error": f"exception:{str(e)}", "data": []}
 
+def fetch_all_desadv(target_date, commands_list=None, auchan_min_amount=850.0, edi1_allowed_entrepots=None, auchan_creds=None, edi1_creds=None):
+    errors = {}
+    aus = fetch_desadv_from_auchan_real(target_date, min_amount=auchan_min_amount,
+                                        username=(auchan_creds or {}).get("username") if auchan_creds else None,
+                                        password=(auchan_creds or {}).get("password") if auchan_creds else None)
+    if aus.get("error"):
+        errors['auchan'] = aus.get("error")
+        auchan_data = []
+    else:
+        auchan_data = aus.get("data", [])
+
+    edi = fetch_desadv_from_edi1_real(target_date, allowed_entrepots=edi1_allowed_entrepots,
+                                      username=(edi1_creds or {}).get("username") if edi1_creds else None,
+                                      password=(edi1_creds or {}).get("password") if edi1_creds else None)
+    if edi.get("error"):
+        errors['edi1'] = edi.get("error")
+        edi1_data = []
+    else:
+        edi1_data = edi.get("data", [])
+
+    if commands_list:
+        commands_set = set([str(c).strip() for c in commands_list if c])
+        def filter_by_commands_block(data_list):
+            out = []
+            for block in data_list:
+                filtered_cmds = [c for c in block.get("commandes", []) if str(c).strip() in commands_set]
+                if filtered_cmds:
+                    new_block = dict(block)
+                    new_block["commandes"] = filtered_cmds
+                    out.append(new_block)
+            return out
+        auchan_data = filter_by_commands_block(auchan_data)
+        edi1_data = filter_by_commands_block(edi1_data)
+
+    return {"auchan": auchan_data, "edi1": edi1_data, "errors": errors}
+
+# ----------------------
+# UI: login
+# ----------------------
+if not st.session_state.authenticated:
+    st.markdown("---")
+    st.markdown("### 🔐 Connexion requise")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        with st.form("login_form"):
+            username = st.text_input("👤 Identifiant")
+            password = st.text_input("🔒 Mot de passe", type="password")
+            submit = st.form_submit_button("Se connecter", use_container_width=True, type="primary")
+            if submit:
+                is_valid, role, web_access = check_password(username, password)
+                if is_valid:
+                    st.session_state.authenticated = True
+                    st.session_state.user_role = role
+                    st.session_state.user_web_access = web_access
+                    st.session_state.username = username
+                    st.success(f"✅ Bienvenue {username} !")
+                    st.rerun()
+                else:
+                    st.error("❌ Identifiant ou mot de passe incorrect")
+        st.info("💡 Demo: admin / admin123 ou user1 / user123")
+    st.stop()
+
+# ----------------------
+# MAIN HEADER
+# ----------------------
+st.markdown('<h1 class="main-header">🧾 Comparateur pour DESADV</h1>', unsafe_allow_html=True)
+st.markdown(f'<p class="subtitle">Bienvenue {st.session_state.username} ({st.session_state.user_role}) | Analysez vos commandes et bons de livraison</p>', unsafe_allow_html=True)
+
+# ----------------------
+# SIDEBAR
+# ----------------------
 with st.sidebar:
-    st.header("📁 Fichiers")
-    
-    # Bouton déconnexion
+    st.markdown(f"### 👤 {st.session_state.username}")
+    st.caption(f"Rôle: {st.session_state.user_role}")
     if st.button("🚪 Déconnexion", use_container_width=True):
         st.session_state.authenticated = False
         st.session_state.user_role = None
         st.session_state.user_web_access = False
         st.session_state.username = None
         st.rerun()
-    
+
     st.markdown("---")
-    
     if st.button("🔄 Nouveau", use_container_width=True, type="primary"):
         st.session_state.key_cmd = f"cmd_{time.time()}"
         st.session_state.key_bl = f"bl_{time.time()}"
         st.session_state.historique = []
         st.rerun()
+
     st.markdown("---")
-    commande_files = st.file_uploader(
-        "📦 PDF(s) Commande client", 
-        type="pdf", 
-        accept_multiple_files=True,
-        key=st.session_state.key_cmd
-    )
-    bl_files = st.file_uploader(
-        "📋 PDF(s) Bon de livraison", 
-        type="pdf", 
-        accept_multiple_files=True,
-        key=st.session_state.key_bl
-    )
+    st.header("📁 Fichiers")
+    commande_files = st.file_uploader("📦 PDF(s) Commande client", type="pdf", accept_multiple_files=True, key=st.session_state.key_cmd)
+    bl_files = st.file_uploader("📋 PDF(s) Bon de livraison", type="pdf", accept_multiple_files=True, key=st.session_state.key_bl)
+
     st.markdown("---")
     st.header("⚙️ Options")
-    hide_unmatched = st.checkbox(
-        "👁️‍🗨️ Masquer les commandes sans correspondance",
-        value=True,
-        help="Exclut les articles MISSING_IN_BL de l'export Excel"
-    )
+    hide_unmatched = st.checkbox("👁️‍🗨️ Masquer les commandes sans correspondance", value=True, help="Exclut les articles MISSING_IN_BL de l'export Excel")
+
     st.markdown("---")
     st.header("📊 Historique")
     if st.session_state.historique:
@@ -515,49 +617,80 @@ with st.sidebar:
             st.rerun()
     else:
         st.info("Aucune comparaison enregistrée")
-    
-    # Section DESADV (uniquement si accès web autorisé)
+
+    # Gestion utilisateurs (Admin)
+    if st.session_state.user_role == "admin":
+        st.markdown("---")
+        st.header("👥 Gestion utilisateurs")
+        if st.button("⚙️ Gérer les utilisateurs", use_container_width=True):
+            st.session_state.show_help = "manage_users"
+            st.rerun()
+
+    # DESADV section (if allowed)
     if st.session_state.user_web_access:
         st.markdown("---")
         st.header("🌐 Vérification DESADV")
-        
-        if st.button("🔍 Vérifier les DESADV du jour", use_container_width=True, type="secondary"):
-            with st.spinner("Connexion à Auchan ATGPED..."):
-                time.sleep(1.5)
-                desadv_list, date_livraison = fetch_desadv_from_auchan()
-                st.session_state.desadv_data = desadv_list
-                st.session_state.desadv_date = date_livraison
+        date_options = {
+            "Demain": (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y"),
+            "Aujourd'hui": datetime.now().strftime("%d/%m/%Y"),
+            "Hier": (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y"),
+        }
+        selected_date_label = st.selectbox("📅 Date de livraison", list(date_options.keys()), index=0)
+        selected_date = date_options[selected_date_label]
+
+        mode = st.selectbox("Mode", ["Par date", "Par liste de commandes"])
+        commands_list = None
+        if mode == "Par liste de commandes":
+            text = st.text_area("Liste de numéros (séparés par virgule ou nouvelle ligne)")
+            commands_list = [c.strip() for c in re.split(r"[,\n;]+", text) if c.strip()]
+
+        min_amount = st.number_input("Seuil Auchan (€)", value=850)
+        edi_allowed = st.text_input("Entrepôts EDI1 autorisés (séparés par ,)", value="ALBY,DOLE,LUXEMONT")
+        edi_allowed_list = [e.strip() for e in edi_allowed.split(",") if e.strip()]
+
+        if st.button("🔍 Vérifier les DESADV", use_container_width=True, type="secondary"):
+            with st.spinner("Connexion aux sites..."):
+                time.sleep(0.5)
+                all_results = fetch_all_desadv(selected_date, commands_list=commands_list, auchan_min_amount=min_amount, edi1_allowed_entrepots=edi_allowed_list)
+                st.session_state.desadv_data = all_results
+                st.session_state.desadv_date = selected_date
             st.rerun()
-        
+
         if hasattr(st.session_state, 'desadv_data') and st.session_state.desadv_data:
-            nb_total = len(st.session_state.desadv_data)
-            montant_total = sum([d["montant_total"] for d in st.session_state.desadv_data])
-            
-            st.success(f"✅ **{nb_total} DESADV** à faire pour le {st.session_state.desadv_date}")
-            st.metric("Montant total", f"{montant_total:,.2f} €")
-            
-            with st.expander("📋 Détails des DESADV", expanded=True):
-                for idx, desadv in enumerate(st.session_state.desadv_data, 1):
-                    st.markdown(f"""
-                    **{idx}. {desadv['entrepot']}**  
-                    💰 Montant: **{desadv['montant_total']:,.2f} €**  
-                    📦 {desadv['nb_commandes']} commande(s): {', '.join(desadv['commandes'])}
-                    """)
-                    st.markdown("---")
-            
-            if st.button("🗑️ Effacer les notifications", use_container_width=True):
-                st.session_state.desadv_data = []
-                st.rerun()
+            auchan = st.session_state.desadv_data.get("auchan", [])
+            edi1 = st.session_state.desadv_data.get("edi1", [])
+            total = len(auchan) + len(edi1)
+            if total > 0:
+                st.success(f"✅ **{total} DESADV** trouvés")
+                st.caption(f"📅 {st.session_state.desadv_date}")
+                if auchan:
+                    st.markdown(f"**Auchan:** {len(auchan)}")
+                if edi1:
+                    st.markdown(f"**EDI1:** {len(edi1)}")
+                if st.button("🗑️ Effacer", use_container_width=True):
+                    st.session_state.desadv_data = {}
+                    st.rerun()
     else:
         st.markdown("---")
-        st.info("🔒 Vérification DESADV\nAccès non autorisé pour votre compte")
-    
+        st.info("🔒 Vérification DESADV\nAccès non autorisé")
+
     st.markdown("---")
     if st.button("❓ Comment utiliser", use_container_width=True):
         st.session_state.show_help = "guide"
         st.rerun()
 
-if st.button("🔍 Lancer la comparaison", use_container_width=True, type="primary"):
+# ----------------------
+# MAIN ACTION BUTTONS
+# ----------------------
+col1, col2 = st.columns([4, 1])
+with col1:
+    launch_button = st.button("🔍 Lancer la comparaison", use_container_width=True, type="primary")
+with col2:
+    if st.button("❓ Aide", use_container_width=True):
+        st.session_state.show_help = "guide"
+        st.rerun()
+
+if launch_button:
     if not commande_files or not bl_files:
         st.error("⚠️ Veuillez téléverser des commandes ET des bons de livraison.")
         st.stop()
@@ -569,10 +702,14 @@ if st.button("🔍 Lancer la comparaison", use_container_width=True, type="prima
             all_command_records.extend(res["records"])
             for rec in res["records"]:
                 commandes_dict[rec["order_num"]].append(rec)
-        for k in commandes_dict.keys():
+        for k in list(commandes_dict.keys()):
             df = pd.DataFrame(commandes_dict[k])
+            if df.empty:
+                commandes_dict[k] = pd.DataFrame(columns=["ref", "code_article", "qte_commande"])
+                continue
             df = df.groupby(["ref", "code_article"], as_index=False).agg({"qte_commande": "sum"})
             commandes_dict[k] = df
+
         bls_dict = defaultdict(list)
         all_bl_records = []
         for f in bl_files:
@@ -580,25 +717,31 @@ if st.button("🔍 Lancer la comparaison", use_container_width=True, type="prima
             all_bl_records.extend(res["records"])
             for rec in res["records"]:
                 bls_dict[rec["order_num"]].append(rec)
-        for k in bls_dict.keys():
+        for k in list(bls_dict.keys()):
             df = pd.DataFrame(bls_dict[k])
+            if df.empty:
+                bls_dict[k] = pd.DataFrame(columns=["ref", "qte_bl"])
+                continue
             df = df.groupby("ref", as_index=False).agg({"qte_bl": "sum"})
             bls_dict[k] = df
+
         results = {}
         for order_num, df_cmd in commandes_dict.items():
             df_bl = bls_dict.get(order_num, pd.DataFrame(columns=["ref", "qte_bl"]))
             merged = pd.merge(df_cmd, df_bl, on="ref", how="left")
+            if "qte_commande" not in merged.columns:
+                merged["qte_commande"] = 0
             merged["qte_commande"] = pd.to_numeric(merged["qte_commande"], errors="coerce").fillna(0)
-            merged["qte_bl"] = pd.to_numeric(merged.get("qte_bl", pd.Series()), errors="coerce").fillna(0)
+            if "qte_bl" not in merged.columns:
+                merged["qte_bl"] = 0
+            merged["qte_bl"] = pd.to_numeric(merged["qte_bl"], errors="coerce").fillna(0)
             def status_row(r):
                 if r["qte_bl"] == 0:
                     return "MISSING_IN_BL"
                 return "OK" if r["qte_commande"] == r["qte_bl"] else "QTY_DIFF"
             merged["status"] = merged.apply(status_row, axis=1)
             merged["diff"] = merged["qte_bl"] - merged["qte_commande"]
-            merged["taux_service"] = merged.apply(
-                lambda r: calculate_service_rate(r["qte_commande"], r["qte_bl"]), axis=1
-            )
+            merged["taux_service"] = merged.apply(lambda r: min((r["qte_bl"] / r["qte_commande"] * 100) if r["qte_commande"] > 0 else 0, 100), axis=1)
             results[order_num] = merged
         comparison_data = {
             "timestamp": datetime.now(),
@@ -609,19 +752,22 @@ if st.button("🔍 Lancer la comparaison", use_container_width=True, type="prima
         }
         st.session_state.historique.append(comparison_data)
 
+# ----------------------
+# Affichage résultat (Dernier)
+# ----------------------
 if st.session_state.historique:
     latest = st.session_state.historique[-1]
     results = latest["results"]
     commandes_dict = latest["commandes_dict"]
     bls_dict = latest["bls_dict"]
     hide_unmatched = latest["hide_unmatched"]
-    
+
     def order_included(df):
         total_bl = df["qte_bl"].sum() if "qte_bl" in df.columns else 0
         if hide_unmatched and total_bl == 0:
             return False
         return True
-    
+
     total_commande = sum([df["qte_commande"].sum() for df in results.values() if order_included(df)])
     total_livre = sum([df["qte_bl"].sum() for df in results.values() if order_included(df)])
     total_manquant = total_commande - total_livre
@@ -629,7 +775,7 @@ if st.session_state.historique:
     total_articles_ok = sum([(df["status"] == "OK").sum() for df in results.values() if order_included(df)])
     total_articles_diff = sum([(df["status"] == "QTY_DIFF").sum() for df in results.values() if order_included(df)])
     total_articles_missing = sum([(df["status"] == "MISSING_IN_BL").sum() for df in results.values() if order_included(df)])
-    
+
     st.markdown("### 📋 Détails par commande")
     for order_num, df in results.items():
         if not order_included(df):
@@ -641,8 +787,7 @@ if st.session_state.historique:
         total_bl = df["qte_bl"].sum()
         taux = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
         with st.expander(
-            f"📦 Commande **{order_num}** — Taux de service: **{taux:.1f}%** | "
-            f"✅ {n_ok} | ⚠️ {n_diff} | ❌ {n_miss}"
+            f"📦 Commande **{order_num}** — Taux de service: **{taux:.1f}%** | ✅ {n_ok} | ⚠️ {n_diff} | ❌ {n_miss}"
         ):
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -659,12 +804,8 @@ if st.session_state.historique:
                 if val == "MISSING_IN_BL":
                     return "background-color: #f8d7da"
                 return ""
-            st.dataframe(
-                df.style.applymap(color_status, subset=["status"]),
-                use_container_width=True,
-                height=400
-            )
-    
+            st.dataframe(df.style.applymap(color_status, subset=["status"]), use_container_width=True, height=400)
+
     st.markdown("---")
     st.markdown("### 📥 Export")
     output = io.BytesIO()
@@ -718,6 +859,7 @@ if st.session_state.historique:
             summary_data['Articles manquants'].append((df["status"] == "MISSING_IN_BL").sum())
         df_summary = pd.DataFrame(summary_data)
         df_summary.to_excel(writer, sheet_name="Récapitulatif", index=False)
+
     col1, col2 = st.columns([3, 1])
     with col1:
         st.download_button(
@@ -731,54 +873,24 @@ if st.session_state.historique:
         if st.button("🗑️ Supprimer ce résultat", use_container_width=True):
             st.session_state.historique.pop()
             st.rerun()
-    
+
     st.markdown("---")
     st.markdown("### 📊 Vue d'ensemble")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.markdown(f"""
-        <div class="kpi-card success-card">
-            <div class="kpi-label">Taux de service global</div>
-            <div class="kpi-value">{taux_service_global:.1f}%</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="kpi-card success-card"><div class="kpi-label">Taux de service global</div><div class="kpi-value">{taux_service_global:.1f}%</div></div>""", unsafe_allow_html=True)
     with col2:
-        st.markdown(f"""
-        <div class="kpi-card info-card">
-            <div class="kpi-label">Total commandé</div>
-            <div class="kpi-value">{int(total_commande)}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="kpi-card info-card"><div class="kpi-label">Total commandé</div><div class="kpi-value">{int(total_commande)}</div></div>""", unsafe_allow_html=True)
     with col3:
-        st.markdown(f"""
-        <div class="kpi-card">
-            <div class="kpi-label">Total livré</div>
-            <div class="kpi-value">{int(total_livre)}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="kpi-card"><div class="kpi-label">Total livré</div><div class="kpi-value">{int(total_livre)}</div></div>""", unsafe_allow_html=True)
     with col4:
-        st.markdown(f"""
-        <div class="kpi-card warning-card">
-            <div class="kpi-label">Total manquant</div>
-            <div class="kpi-value">{int(total_manquant)}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    st.markdown("<br>", unsafe_allow_html=True)
-    
+        st.markdown(f"""<div class="kpi-card warning-card"><div class="kpi-label">Total manquant</div><div class="kpi-value">{int(total_manquant)}</div></div>""", unsafe_allow_html=True)
+
     col1, col2 = st.columns(2)
     if PLOTLY_AVAILABLE:
         with col1:
-            status_data = pd.DataFrame({
-                'Statut': ['✅ OK', '⚠️ Différence', '❌ Manquant'],
-                'Nombre': [total_articles_ok, total_articles_diff, total_articles_missing]
-            })
-            fig_status = px.pie(
-                status_data, 
-                values='Nombre', 
-                names='Statut',
-                title='Répartition des articles',
-                color_discrete_sequence=['#38ef7d', '#f5576c', '#ff6b6b']
-            )
+            status_data = pd.DataFrame({'Statut': ['✅ OK', '⚠️ Différence', '❌ Manquant'], 'Nombre': [total_articles_ok, total_articles_diff, total_articles_missing]})
+            fig_status = px.pie(status_data, values='Nombre', names='Statut', title='Répartition des articles', color_discrete_sequence=['#38ef7d', '#f5576c', '#ff6b6b'])
             fig_status.update_traces(textposition='inside', textinfo='percent+label')
             st.plotly_chart(fig_status, use_container_width=True)
         with col2:
@@ -789,35 +901,16 @@ if st.session_state.historique:
                 total_cmd = df["qte_commande"].sum()
                 total_bl = df["qte_bl"].sum()
                 rate = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
-                service_rates.append({
-                    'Commande': str(order_num),
-                    'Taux de service': rate
-                })
+                service_rates.append({'Commande': str(order_num), 'Taux de service': rate})
             df_service = pd.DataFrame(service_rates)
             if not df_service.empty:
-                fig_service = go.Figure(data=[
-                    go.Bar(
-                        x=df_service['Commande'],
-                        y=df_service['Taux de service'],
-                        marker=dict(
-                            color=df_service['Taux de service'],
-                            colorscale=[[0, '#ff6b6b'], [0.5, '#ffd93d'], [1, '#38ef7d']],
-                            cmin=0,
-                            cmax=100,
-                            showscale=False
-                        ),
-                        text=[f"{v:.1f}%" for v in df_service['Taux de service']],
-                        textposition='outside'
-                    )
-                ])
-                fig_service.update_layout(
-                    title='Taux de service par commande',
-                    xaxis_title='N° Commande',
-                    yaxis_title='Taux de service (%)',
-                    yaxis_range=[0, 110],
-                    showlegend=False,
-                    xaxis=dict(type='category')
-                )
+                fig_service = go.Figure(data=[go.Bar(x=df_service['Commande'], y=df_service['Taux de service'],
+                                                    marker=dict(color=df_service['Taux de service'],
+                                                                colorscale=[[0, '#ff6b6b'], [0.5, '#ffd93d'], [1, '#38ef7d']],
+                                                                cmin=0, cmax=100, showscale=False),
+                                                    text=[f"{v:.1f}%" for v in df_service['Taux de service']],
+                                                    textposition='outside')])
+                fig_service.update_layout(title='Taux de service par commande', xaxis_title='N° Commande', yaxis_title='Taux de service (%)', yaxis_range=[0, 110], showlegend=False, xaxis=dict(type='category'))
                 st.plotly_chart(fig_service, use_container_width=True)
             else:
                 st.info("Aucune commande à afficher.")
@@ -834,7 +927,7 @@ if st.session_state.historique:
                 total_bl = df["qte_bl"].sum()
                 rate = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
                 st.metric(f"Commande {order_num}", f"{rate:.1f}%")
-    
+
     tabs = st.tabs(["📈 Statistiques", "🏆 Top produits"])
     with tabs[0]:
         st.markdown("### 📈 Articles manquants par code article")
@@ -845,6 +938,8 @@ if st.session_state.historique:
             missing = df[df["status"] == "MISSING_IN_BL"]
             for _, row in missing.iterrows():
                 code = row["code_article"]
+                if not code:
+                    code = "(sans code)"
                 if code not in missing_by_code:
                     missing_by_code[code] = {"Code article": code, "Qté totale manquante": 0}
                 missing_by_code[code]["Qté totale manquante"] += int(row["qte_commande"])
@@ -890,148 +985,120 @@ if st.session_state.historique:
 else:
     st.info("👆 Téléversez vos fichiers et lancez la comparaison pour commencer")
 
-# Modal d'aide / Configuration
-if st.session_state.show_help == "guide":
+# ----------------------
+# Affichage DESADV si disponibles et pas d'historique
+# ----------------------
+if hasattr(st.session_state, 'desadv_data') and st.session_state.desadv_data and not st.session_state.historique:
     st.markdown("---")
-    st.markdown("## 📖 Guide d'utilisation")
-    
-    with st.expander("🚀 Démarrage rapide", expanded=True):
-        st.markdown("""
-        ### Étapes principales :
-        1. **Téléversez vos PDF** dans la barre latérale gauche
-           - 📦 Commandes client (un ou plusieurs)
-           - 📋 Bons de livraison (un ou plusieurs)
-        
-        2. **Cliquez sur "🔍 Lancer la comparaison"**
-        
-        3. **Consultez les résultats** :
-           - Détails par commande
-           - Rapport Excel téléchargeable
-           - Statistiques et KPIs
-        """)
-    
-    with st.expander("📊 Comprendre les résultats"):
-        st.markdown("""
-        ### Codes couleur :
-        - 🟢 **OK** : Quantité commandée = Quantité livrée
-        - 🟡 **QTY_DIFF** : Différence de quantité
-        - 🔴 **MISSING_IN_BL** : Article non trouvé dans le BL
-        
-        ### KPIs :
-        - **Taux de service** : (Qté livrée / Qté commandée) × 100
-        - **Total manquant** : Somme des articles non livrés
-        """)
-    
-    with st.expander("⚙️ Options avancées"):
-        st.markdown("""
-        ### Masquer les commandes sans correspondance
-        Exclut de l'export Excel les commandes qui n'ont pas de BL correspondant.
-        
-        ### Historique
-        Toutes vos comparaisons sont sauvegardées temporairement dans la session.
-        
-        ### Vérification DESADV (Admin uniquement)
-        Connecte automatiquement au site web pour récupérer les commandes à traiter aujourd'hui.
-        """)
-    
-    if st.button("✅ Compris, retour à l'outil", type="primary"):
-        st.session_state.show_help = False
-        st.rerun()
-
-elif st.session_state.show_help == "config_web":
-    st.markdown("---")
-    st.markdown("## 🌐 Configuration connexion Auchan ATGPED")
-    
-    # Vérifier les droits admin
-    if st.session_state.user_role != "admin":
-        st.error("🔒 Cette fonctionnalité est réservée aux administrateurs")
-        if st.button("↩️ Retour"):
-            st.session_state.show_help = False
-            st.rerun()
-        st.stop()
-    
-    st.info("Configuration des identifiants pour la connexion automatique au site Auchan ATGPED")
-    
-    st.markdown("### 🔐 Configuration sécurisée")
-    
-    with st.expander("📖 Comment configurer les identifiants", expanded=True):
-        st.markdown("""
-        Pour des raisons de sécurité, les identifiants sont stockés dans **Streamlit Secrets** (variables d'environnement chiffrées).
-        
-        #### Sur Streamlit Cloud :
-        1. Allez dans **Settings** de votre app
-        2. Cliquez sur **Secrets**
-        3. Ajoutez :
-        ```toml
-        AUCHAN_USERNAME = "votre_identifiant"
-        AUCHAN_PASSWORD = "votre_mot_de_passe"
-        ```
-        4. Cliquez sur **Save**
-        
-        #### En local :
-        Créez un fichier `.streamlit/secrets.toml` :
-        ```toml
-        AUCHAN_USERNAME = "votre_identifiant"
-        AUCHAN_PASSWORD = "votre_mot_de_passe"
-        ```
-        
-        ⚠️ **Important** : Ne jamais mettre les identifiants directement dans le code !
-        """)
-    
-    st.markdown("### 🧪 Test de connexion")
+    st.markdown("## 📦 DESADV à traiter")
+    st.markdown(f"**📅 Date de livraison:** {st.session_state.desadv_date}")
+    auchan = st.session_state.desadv_data.get("auchan", [])
+    edi1 = st.session_state.desadv_data.get("edi1", [])
     col1, col2 = st.columns(2)
-    
     with col1:
-        # Vérifier si les secrets sont configurés
-        secrets_configured = False
-        try:
-            if "AUCHAN_USERNAME" in st.secrets and "AUCHAN_PASSWORD" in st.secrets:
-                secrets_configured = True
-                st.success("✅ Identifiants configurés")
-        except:
-            st.warning("⚠️ Identifiants non configurés")
-    
+        st.markdown("### 🟦 AUCHAN")
+        if auchan:
+            total_montant = sum([d.get("montant_total", 0) for d in auchan])
+            st.metric("Montant total", f"{total_montant:,.2f} €")
+            st.metric("Nombre de DESADV", len(auchan))
+            for desadv in auchan:
+                with st.expander(f"📦 {desadv['entrepot']}", expanded=False):
+                    st.markdown(f"**Montant:** {desadv['montant_total']:,.2f} €")
+                    st.markdown(f"**Commandes ({desadv['nb_commandes']}):**")
+                    for cmd in desadv['commandes']:
+                        st.write(f"- {cmd}")
+        else:
+            st.info("Aucun DESADV Auchan")
     with col2:
-        if st.button("🧪 Tester la connexion", type="primary", disabled=not secrets_configured):
-            with st.spinner("Test de connexion à Auchan ATGPED..."):
-                try:
-                    import requests
-                    from bs4 import BeautifulSoup
-                    
-                    session = requests.Session()
-                    login_url = "https://auchan.atgped.net/gui.php"
-                    
-                    login_data = {
-                        "username": st.secrets["AUCHAN_USERNAME"],
-                        "password": st.secrets["AUCHAN_PASSWORD"],
-                        "action": "login"
-                    }
-                    
-                    response = session.post(login_url, data=login_data, timeout=10)
-                    
-                    if "Liste des commandes" in response.text or "Documents" in response.text:
-                        st.success("✅ Connexion réussie ! Le système peut accéder au site.")
+        st.markdown("### 🟩 EDI1")
+        if edi1:
+            st.metric("Nombre de DESADV", len(edi1))
+            for desadv in edi1:
+                with st.expander(f"📦 {desadv['entrepot']}", expanded=False):
+                    st.markdown(f"**Commandes ({desadv['nb_commandes']}):**")
+                    for cmd in desadv['commandes']:
+                        st.write(f"- {cmd}")
+        else:
+            st.info("Aucun DESADV EDI1")
+
+# ----------------------
+# Aide / Gestion utilisateurs (modale-like)
+# ----------------------
+if st.session_state.show_help == "manage_users":
+    st.markdown("---")
+    st.markdown("## 👥 Gestion des utilisateurs")
+    if st.session_state.user_role != "admin":
+        st.error("🔒 Accès refusé")
+        st.stop()
+    tabs = st.tabs(["📋 Liste", "➕ Ajouter", "✏️ Modifier"])
+    with tabs[0]:
+        st.markdown("### Liste des utilisateurs")
+        users_data = []
+        for username, data in USERS_DB.items():
+            users_data.append({"Utilisateur": username, "Rôle": data["role"], "Accès DESADV": "✅" if data["web_access"] else "❌"})
+        st.dataframe(pd.DataFrame(users_data), use_container_width=True, hide_index=True)
+        st.markdown("---")
+        st.markdown("### Supprimer un utilisateur")
+        user_to_delete = st.selectbox("Sélectionner un utilisateur", [u for u in USERS_DB.keys() if u != "admin"])
+        if st.button("🗑️ Supprimer", type="secondary"):
+            if delete_user(user_to_delete):
+                st.success(f"✅ Utilisateur {user_to_delete} supprimé")
+                time.sleep(1)
+                st.rerun()
+    with tabs[1]:
+        st.markdown("### Ajouter un utilisateur")
+        with st.form("add_user"):
+            new_username = st.text_input("👤 Nom d'utilisateur")
+            new_password = st.text_input("🔒 Mot de passe", type="password")
+            new_role = st.selectbox("Rôle", ["user", "admin"])
+            new_web_access = st.checkbox("Accès vérification DESADV")
+            if st.form_submit_button("➕ Ajouter", type="primary"):
+                if new_username and new_password:
+                    if new_username in USERS_DB:
+                        st.error("❌ Cet utilisateur existe déjà")
                     else:
-                        st.error("❌ Échec de connexion. Vérifiez les identifiants.")
-                except Exception as e:
-                    st.error(f"❌ Erreur: {str(e)}")
-    
-    st.markdown("### ⚙️ Paramètres de récupération")
-    st.markdown("""
-    **Configuration actuelle :**
-    - 🔗 URL : `https://auchan.atgped.net/gui.php`
-    - 📅 Filtre : Commandes à livrer **demain**
-    - 💰 Seuil : Montant total par entrepôt **≥ 850€**
-    - 📊 Regroupement : Par entrepôt (additionne les montants)
-    """)
-    
+                        save_user(new_username, new_password, new_role, new_web_access)
+                        st.success(f"✅ Utilisateur {new_username} ajouté")
+                        time.sleep(1)
+                        st.rerun()
+                else:
+                    st.error("⚠️ Veuillez remplir tous les champs")
+    with tabs[2]:
+        st.markdown("### Modifier un utilisateur")
+        user_to_edit = st.selectbox("Sélectionner", list(USERS_DB.keys()))
+        if user_to_edit:
+            current_data = USERS_DB[user_to_edit]
+            with st.form("edit_user"):
+                edit_password = st.text_input("🔒 Nouveau mot de passe (laisser vide pour ne pas changer)", type="password")
+                edit_role = st.selectbox("Rôle", ["user", "admin"], index=0 if current_data["role"] == "user" else 1)
+                edit_web_access = st.checkbox("Accès vérification DESADV", value=current_data["web_access"])
+                if st.form_submit_button("💾 Sauvegarder", type="primary"):
+                    new_pwd = edit_password if edit_password else current_data["password"]
+                    save_user(user_to_edit, new_pwd, edit_role, edit_web_access)
+                    st.success(f"✅ Utilisateur {user_to_edit} modifié")
+                    time.sleep(1)
+                    st.rerun()
     if st.button("↩️ Retour", type="secondary"):
         st.session_state.show_help = False
         st.rerun()
 
-st.markdown("""
-<div style='text-align: center; margin-top: 40px; font-size: 18px; color: #888;'>
-    ⭐⭐⭐⭐⭐<br>
-    <strong>Powered by IC - 2025</strong>
-</div>
-""", unsafe_allow_html=True)
+elif st.session_state.show_help == "guide":
+    st.markdown("---")
+    st.markdown("## 📖 Guide d'utilisation")
+    with st.expander("🚀 Démarrage rapide", expanded=True):
+        st.markdown("""
+        1. Téléversez vos PDF: Commandes et Bons de livraison.
+        2. Cliquez "Lancer la comparaison".
+        3. Consultez les détails par commande et téléchargez le rapport Excel.
+        """)
+    with st.expander("📊 Comprendre les résultats"):
+        st.markdown("""
+        - ✅ OK : Quantité commandée = Quantité livrée
+        - ⚠️ QTY_DIFF : Différence de quantité
+        - ❌ MISSING_IN_BL : Article non trouvé dans le BL
+        """)
+    if st.button("✅ Compris, retour à l'outil", type="primary"):
+        st.session_state.show_help = False
+        st.rerun()
+
+st.markdown("<div style='text-align:center; margin-top:40px; font-size:18px; color:#888;'>⭐⭐⭐⭐⭐ Powered by IC - 2025</div>", unsafe_allow_html=True)
