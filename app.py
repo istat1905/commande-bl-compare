@@ -678,8 +678,6 @@ st.markdown("""
     
     with tabs[0]:
         st.markdown("### 📈 Articles manquants par code article")
-        
-        # Créer un DataFrame des articles manquants AGRÉGÉS PAR CODE ARTICLE
         missing_by_code = {}
         for order_num, df in results.items():
             if not order_included(df):
@@ -688,16 +686,12 @@ st.markdown("""
             for _, row in missing.iterrows():
                 code = row["code_article"]
                 if code not in missing_by_code:
-                    missing_by_code[code] = {
-                        "Code article": code,
-                        "Qté totale manquante": 0
-                    }
+                    missing_by_code[code] = {"Code article": code, "Qté totale manquante": 0}
                 missing_by_code[code]["Qté totale manquante"] += int(row["qte_commande"])
         
         if missing_by_code:
             df_missing = pd.DataFrame(list(missing_by_code.values()))
             df_missing = df_missing.sort_values("Qté totale manquante", ascending=False).head(10)
-            
             st.markdown("#### Top 10 des codes articles manquants")
             st.dataframe(df_missing, use_container_width=True, hide_index=True)
         else:
@@ -705,23 +699,19 @@ st.markdown("""
     
     with tabs[1]:
         st.markdown("### 🏆 Classement des produits")
-        
         all_products = []
         for order_num, df in results.items():
             if not order_included(df):
                 continue
             for _, row in df.iterrows():
-                all_products.append({
-                    "Code article": row["code_article"],
-                    "EAN": row["ref"],
-                    "Qté commandée": int(row["qte_commande"]),
-                    "Qté livrée": int(row["qte_bl"])
-                })
+                all_products.append({"Code article": row["code_article"], "EAN": row["ref"], "Qté commandée": int(row["qte_commande"]), "Qté livrée": int(row["qte_bl"])})
         
-        df_products = pd.DataFrame(all_products) if all_products else pd.DataFrame(columns=["Code article", "EAN", "Qté commandée", "Qté livrée"])
+        if all_products:
+            df_products = pd.DataFrame(all_products)
+        else:
+            df_products = pd.DataFrame(columns=["Code article", "EAN", "Qté commandée", "Qté livrée"])
         
         col1, col2 = st.columns(2)
-        
         with col1:
             st.markdown("#### 📦 Top 10 commandés")
             if not df_products.empty:
@@ -729,7 +719,6 @@ st.markdown("""
                 st.dataframe(top_cmd.reset_index(), use_container_width=True, hide_index=True)
             else:
                 st.info("Aucun produit à afficher.")
-        
         with col2:
             st.markdown("#### 📋 Top 10 livrés")
             if not df_products.empty:
