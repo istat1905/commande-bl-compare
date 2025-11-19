@@ -160,7 +160,7 @@ if not st.session_state.authenticated:
                 else:
                     st.error("❌ Identifiant ou mot de passe incorrect")
         
-        st.info("💡 **Demo**: admin / admin123 ou user1 / user123")
+        st.info("💡 **Demo**: user1 / user123")
     st.stop()
 
 st.markdown('<h1 class="main-header">🧾 Comparateur pour DESADV</h1>', unsafe_allow_html=True)
