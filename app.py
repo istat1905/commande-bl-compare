@@ -199,20 +199,14 @@ def extract_records_from_bl_pdf(pdf_file):
                     if not valid_eans:
                         continue
                     ean = valid_eans[0]
+                    nums = re.findall(r"[\d,.]+", ligne)
                     qte = None
-                    m = re.search(r"(?:Qt[eé]e|QTE|Qty|Quantit[eé])\s*[:\-]?\s*([0-9]+(?:[.,][0-9]+)?)", ligne, flags=re.IGNORECASE)
-                    if m:
+                    if nums:
+                        candidate = nums[-2] if len(nums) >= 2 else nums[-1]
                         try:
-                            qte = float(m.group(1).replace(",", "."))
+                            qte = float(candidate.replace(",", "."))
                         except:
-                            qte = None
-                    if qte is None:
-                        nums = re.findall(r"([0-9]+(?:[.,][0-9]+)?)", ligne)
-                        if nums:
-                            try:
-                                qte = float(nums[-1].replace(",", "."))
-                            except:
-                                continue
+                            continue
                     if qte is None:
                         continue
                     records.append({
