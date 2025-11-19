@@ -5,7 +5,7 @@ import io
 import re
 from collections import defaultdict
 from datetime import datetime
-import time  # ajouté pour générer des clés uniques pour les uploaders
+import time
 
 # Vérifier si plotly est disponible
 try:
@@ -40,12 +40,10 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-
 # Initialiser le session state
 if 'historique' not in st.session_state:
     st.session_state.historique = []
 
-# --- Clés dynamiques pour reset propre des file_uploaders (NE PAS toucher ces clés directement ailleurs) ---
 if "key_cmd" not in st.session_state:
     st.session_state.key_cmd = "cmd_1"
 if "key_bl" not in st.session_state:
@@ -270,7 +268,6 @@ def calculate_service_rate(qte_cmd, qte_bl):
 with st.sidebar:
     st.header("📁 Fichiers")
     
-    # Bouton Nouveau comparatif -> utilise clés dynamiques pour reset safe
     if st.button("🔄 Nouveau", use_container_width=True, type="primary"):
         st.session_state.key_cmd = f"cmd_{time.time()}"
         st.session_state.key_bl = f"bl_{time.time()}"
@@ -323,7 +320,6 @@ if st.button("🔍 Lancer la comparaison", use_container_width=True, type="prima
         st.stop()
 
     with st.spinner("🔄 Analyse en cours..."):
-        # Extraction des commandes
         commandes_dict = defaultdict(list)
         all_command_records = []
         
@@ -338,7 +334,6 @@ if st.button("🔍 Lancer la comparaison", use_container_width=True, type="prima
             df = df.groupby(["ref", "code_article"], as_index=False).agg({"qte_commande": "sum"})
             commandes_dict[k] = df
 
-        # Extraction des BL
         bls_dict = defaultdict(list)
         all_bl_records = []
         
@@ -353,7 +348,6 @@ if st.button("🔍 Lancer la comparaison", use_container_width=True, type="prima
             df = df.groupby("ref", as_index=False).agg({"qte_bl": "sum"})
             bls_dict[k] = df
 
-        # Matching et statuts
         results = {}
         for order_num, df_cmd in commandes_dict.items():
             df_bl = bls_dict.get(order_num, pd.DataFrame(columns=["ref", "qte_bl"]))
@@ -375,7 +369,6 @@ if st.button("🔍 Lancer la comparaison", use_container_width=True, type="prima
             
             results[order_num] = merged
         
-        # Sauvegarder dans l'historique
         comparison_data = {
             "timestamp": datetime.now(),
             "results": results,
@@ -395,14 +388,13 @@ if st.session_state.historique:
     bls_dict = latest["bls_dict"]
     hide_unmatched = latest["hide_unmatched"]
     
-    # helper : inclure commande ? (si hide_unmatched True on exclut celles avec qte_bl total == 0)
     def order_included(df):
         total_bl = df["qte_bl"].sum() if "qte_bl" in df.columns else 0
         if hide_unmatched and total_bl == 0:
             return False
         return True
 
-    # Calculer les KPIs globaux (en excluant les commandes non matchées si hide_unmatched)
+    # Calculer les KPIs globaux
     total_commande = sum([df["qte_commande"].sum() for df in results.values() if order_included(df)])
     total_livre = sum([df["qte_bl"].sum() for df in results.values() if order_included(df)])
     total_manquant = total_commande - total_livre
@@ -412,224 +404,33 @@ if st.session_state.historique:
     total_articles_diff = sum([(df["status"] == "QTY_DIFF").sum() for df in results.values() if order_included(df)])
     total_articles_missing = sum([(df["status"] == "MISSING_IN_BL").sum() for df in results.values() if order_included(df)])
     
-    # KPIs en haut
-    st.markdown("### 📊 Vue d'ensemble")
+    # ======================
+    # 1. DÉTAILS PAR COMMANDE
+    # ======================
+    st.markdown("### 📋 Détails par commande")
     
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.markdown(f"""
-        <div class="kpi-card success-card">
-            <div class="kpi-label">Taux de service global</div>
-            <div class="kpi-value">{taux_service_global:.1f}%</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown(f"""
-        <div class="kpi-card info-card">
-            <div class="kpi-label">Total commandé</div>
-            <div class="kpi-value">{int(total_commande)}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown(f"""
-        <div class="kpi-card">
-            <div class="kpi-label">Total livré</div>
-            <div class="kpi-value">{int(total_livre)}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col4:
-        st.markdown(f"""
-        <div class="kpi-card warning-card">
-            <div class="kpi-label">Total manquant</div>
-            <div class="kpi-value">{int(total_manquant)}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    # Graphiques
-    col1, col2 = st.columns(2)
-    
-    if PLOTLY_AVAILABLE:
-        with col1:
-            # Répartition des statuts (sur commandes incluses)
-            status_data = pd.DataFrame({
-                'Statut': ['✅ OK', '⚠️ Différence', '❌ Manquant'],
-                'Nombre': [total_articles_ok, total_articles_diff, total_articles_missing]
-            })
-            
-            fig_status = px.pie(
-                status_data, 
-                values='Nombre', 
-                names='Statut',
-                title='Répartition des articles',
-                color_discrete_sequence=['#38ef7d', '#f5576c', '#ff6b6b']
-            )
-            fig_status.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_status, use_container_width=True)
-        
-        with col2:
-            # Taux de service par commande (en excluant commandes non matchées si hide_unmatched)
-            service_rates = []
-            for order_num, df in results.items():
-                if not order_included(df):
-                    continue
-                total_cmd = df["qte_commande"].sum()
-                total_bl = df["qte_bl"].sum()
-                rate = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
-                service_rates.append({
-                    'Commande': order_num,
-                    'Taux de service': rate
-                })
-            
-            df_service = pd.DataFrame(service_rates)
-            if not df_service.empty:
-                fig_service = px.bar(
-                    df_service,
-                    x='Commande',
-                    y='Taux de service',
-                    title='Taux de service par commande',
-                    color='Taux de service',
-                    color_continuous_scale=['#ff6b6b', '#ffd93d', '#38ef7d'],
-                    range_color=[0, 100]
-                )
-                fig_service.update_layout(showlegend=False)
-                st.plotly_chart(fig_service, use_container_width=True)
-            else:
-                st.info("Aucune commande à afficher (filtrage actif ou pas de données).")
-    else:
-        # Version sans graphiques
-        with col1:
-            st.metric("Articles OK", total_articles_ok)
-            st.metric("Articles avec différence", total_articles_diff)
-            st.metric("Articles manquants", total_articles_missing)
-        
-        with col2:
-            for order_num, df in results.items():
-                if not order_included(df):
-                    continue
-                total_cmd = df["qte_commande"].sum()
-                total_bl = df["qte_bl"].sum()
-                rate = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
-                st.metric(f"Commande {order_num}", f"{rate:.1f}%")
-    
-    # Tabs
-    tabs = st.tabs(["📋 Détails commandes", "📈 Statistiques", "🏆 Top produits"])
-    
-    with tabs[0]:
-        st.markdown("### 🔎 Détails par commande")
-        
-        for order_num, df in results.items():
-            # skip commandes non matchées si hide_unmatched activé
-            if not order_included(df):
-                continue
+    for order_num, df in results.items():
+        if not order_included(df):
+            continue
 
-            n_ok = (df["status"] == "OK").sum()
-            n_diff = (df["status"] == "QTY_DIFF").sum()
-            n_miss = (df["status"] == "MISSING_IN_BL").sum()
-            
-            total_cmd = df["qte_commande"].sum()
-            total_bl = df["qte_bl"].sum()
-            taux = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
-            
-            with st.expander(
-                f"📦 Commande **{order_num}** — Taux de service: **{taux:.1f}%** | "
-                f"✅ {n_ok} | ⚠️ {n_diff} | ❌ {n_miss}"
-            ):
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Commandé", int(total_cmd))
-                with col2:
-                    st.metric("Livré", int(total_bl))
-                with col3:
-                    st.metric("Manquant", int(total_cmd - total_bl))
-                
-                def color_status(val):
-                    if val == "OK":
-                        return "background-color: #d4edda"
-                    if val == "QTY_DIFF":
-                        return "background-color: #fff3cd"
-                    if val == "MISSING_IN_BL":
-                        return "background-color: #f8d7da"
-                    return ""
-                
-                st.dataframe(
-                    df.style.applymap(color_status, subset=["status"]),
-                    use_container_width=True,
-                    height=400
-                )
-    
-    with tabs[1]:
-        st.markdown("### 📈 Articles manquants par code article")
+        n_ok = (df["status"] == "OK").sum()
+        n_diff = (df["status"] == "QTY_DIFF").sum()
+        n_miss = (df["status"] == "MISSING_IN_BL").sum()
         
-        # Créer un DataFrame des articles manquants (en respectant le filtre)
-        missing_articles = []
-        for order_num, df in results.items():
-            if not order_included(df):
-                continue
-            missing = df[df["status"] == "MISSING_IN_BL"]
-            for _, row in missing.iterrows():
-                missing_articles.append({
-                    "Code article": row["code_article"],
-                    "EAN": row["ref"],
-                    "Commande": order_num,
-                    "Qté commandée": int(row["qte_commande"])
-                })
+        total_cmd = df["qte_commande"].sum()
+        total_bl = df["qte_bl"].sum()
+        taux = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
         
-        if missing_articles:
-            df_missing = pd.DataFrame(missing_articles)
-            
-            # Top des codes articles manquants
-            top_missing = df_missing.groupby("Code article")["Qté commandée"].sum().sort_values(ascending=False).head(10)
-            
-            if PLOTLY_AVAILABLE:
-                fig_missing = px.bar(
-                    x=top_missing.values,
-                    y=top_missing.index.astype(str),
-                    orientation='h',
-                    title='Top 10 des codes articles manquants',
-                    labels={'x': 'Quantité totale', 'y': 'Code article'},
-                    color=top_missing.values,
-                    color_continuous_scale='Reds'
-                )
-                fig_missing.update_layout(showlegend=False)
-                st.plotly_chart(fig_missing, use_container_width=True)
-            else:
-                st.bar_chart(top_missing)
-            
-            st.dataframe(df_missing, use_container_width=True)
-        else:
-            st.success("✅ Aucun article manquant !")
-    
-    with tabs[2]:
-        st.markdown("### 🏆 Classement des produits")
-        
-        # Top commandés (en respectant filtre)
-        all_products = []
-        for order_num, df in results.items():
-            if not order_included(df):
-                continue
-            for _, row in df.iterrows():
-                all_products.append({
-                    "Code article": row["code_article"],
-                    "EAN": row["ref"],
-                    "Qté commandée": int(row["qte_commande"]),
-                    "Qté livrée": int(row["qte_bl"])
-                })
-        
-        df_products = pd.DataFrame(all_products) if all_products else pd.DataFrame(columns=["Code article", "EAN", "Qté commandée", "Qté livrée"])
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
+        with st.expander(
+            f"📦 Commande **{order_num}** — Taux de service: **{taux:.1f}%** | "
+            f"✅ {n_ok} | ⚠️ {n_diff} | ❌ {n_miss}"
+        ):
+            col1, col2, col3 = st.columns(3)
+            with col1:
             st.markdown("#### 📦 Top 10 commandés")
             if not df_products.empty:
                 top_cmd = df_products.groupby("Code article")["Qté commandée"].sum().sort_values(ascending=False).head(10)
-                st.dataframe(top_cmd.reset_index(), use_container_width=True)
+                st.dataframe(top_cmd.reset_index(), use_container_width=True, hide_index=True)
             else:
                 st.info("Aucun produit à afficher.")
         
@@ -637,11 +438,44 @@ if st.session_state.historique:
             st.markdown("#### 📋 Top 10 livrés")
             if not df_products.empty:
                 top_livre = df_products.groupby("Code article")["Qté livrée"].sum().sort_values(ascending=False).head(10)
-                st.dataframe(top_livre.reset_index(), use_container_width=True)
+                st.dataframe(top_livre.reset_index(), use_container_width=True, hide_index=True)
             else:
                 st.info("Aucun produit à afficher.")
+
+else:
+    st.info("👆 Téléversez vos fichiers et lancez la comparaison pour commencer")
+
+# Signature
+st.markdown("""
+<div style='text-align: center; margin-top: 40px; font-size: 18px; color: #888;'>
+    ⭐⭐⭐⭐⭐<br>
+    <strong>Powered by IC - 2025</strong>
+</div>
+""", unsafe_allow_html=True)
+                st.metric("Commandé", int(total_cmd))
+            with col2:
+                st.metric("Livré", int(total_bl))
+            with col3:
+                st.metric("Manquant", int(total_cmd - total_bl))
+            
+            def color_status(val):
+                if val == "OK":
+                    return "background-color: #d4edda"
+                if val == "QTY_DIFF":
+                    return "background-color: #fff3cd"
+                if val == "MISSING_IN_BL":
+                    return "background-color: #f8d7da"
+                return ""
+            
+            st.dataframe(
+                df.style.applymap(color_status, subset=["status"]),
+                use_container_width=True,
+                height=400
+            )
     
-    # Export Excel
+    # ======================
+    # 2. EXPORT EXCEL
+    # ======================
     st.markdown("---")
     st.markdown("### 📥 Export")
     
@@ -650,25 +484,15 @@ if st.session_state.historique:
     filename = f"Comparaison_{timestamp}.xlsx"
     
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        # Écrire chaque commande
         for order_num, df in results.items():
-            # Filtrer si nécessaire : skip commandes non matchées si hide_unmatched activé
             total_bl = df["qte_bl"].sum() if "qte_bl" in df.columns else 0
             if hide_unmatched and total_bl == 0:
                 continue
 
-            # Filtrer si nécessaire au niveau des lignes (conserver le comportement original pour les lignes)
-            if hide_unmatched:
-                # On garde toutes les lignes de la commande (si tu souhaites exclure aussi les lignes MISSING_IN_BL, adapte ici)
-                df_export = df.copy()
-            else:
-                df_export = df.copy()
-            
-            # safe sheet name
+            df_export = df.copy()
             sheet_name = f"C_{order_num}"[:31]
             df_export.to_excel(writer, sheet_name=sheet_name, index=False)
             
-            # Formatage
             workbook = writer.book
             worksheet = writer.sheets[sheet_name]
             
@@ -685,7 +509,6 @@ if st.session_state.historique:
                 elif row.get('status') == 'MISSING_IN_BL':
                     worksheet.set_row(excel_row, None, miss_format)
         
-        # Ajouter une feuille récapitulative
         summary_data = {
             'Commande': [],
             'Taux de service (%)': [],
@@ -731,16 +554,197 @@ if st.session_state.historique:
         if st.button("🗑️ Supprimer ce résultat", use_container_width=True):
             st.session_state.historique.pop()
             st.rerun()
+    
+    # ======================
+    # 3. VUE D'ENSEMBLE
+    # ======================
+    st.markdown("---")
+    st.markdown("### 📊 Vue d'ensemble")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown(f"""
+        <div class="kpi-card success-card">
+            <div class="kpi-label">Taux de service global</div>
+            <div class="kpi-value">{taux_service_global:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div class="kpi-card info-card">
+            <div class="kpi-label">Total commandé</div>
+            <div class="kpi-value">{int(total_commande)}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(f"""
+        <div class="kpi-card">
+            <div class="kpi-label">Total livré</div>
+            <div class="kpi-value">{int(total_livre)}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown(f"""
+        <div class="kpi-card warning-card">
+            <div class="kpi-label">Total manquant</div>
+            <div class="kpi-value">{int(total_manquant)}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Graphiques
+    col1, col2 = st.columns(2)
+    
+    if PLOTLY_AVAILABLE:
+        with col1:
+            status_data = pd.DataFrame({
+                'Statut': ['✅ OK', '⚠️ Différence', '❌ Manquant'],
+                'Nombre': [total_articles_ok, total_articles_diff, total_articles_missing]
+            })
+            
+            fig_status = px.pie(
+                status_data, 
+                values='Nombre', 
+                names='Statut',
+                title='Répartition des articles',
+                color_discrete_sequence=['#38ef7d', '#f5576c', '#ff6b6b']
+            )
+            fig_status.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig_status, use_container_width=True)
+        
+        with col2:
+            # Taux de service par commande - HISTOGRAMME
+            service_rates = []
+            for order_num, df in results.items():
+                if not order_included(df):
+                    continue
+                total_cmd = df["qte_commande"].sum()
+                total_bl = df["qte_bl"].sum()
+                rate = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
+                service_rates.append({
+                    'Commande': str(order_num),  # Convertir en string
+                    'Taux de service': rate
+                })
+            
+            df_service = pd.DataFrame(service_rates)
+            if not df_service.empty:
+                fig_service = go.Figure(data=[
+                    go.Bar(
+                        x=df_service['Commande'],
+                        y=df_service['Taux de service'],
+                        marker=dict(
+                            color=df_service['Taux de service'],
+                            colorscale=[[0, '#ff6b6b'], [0.5, '#ffd93d'], [1, '#38ef7d']],
+                            cmin=0,
+                            cmax=100,
+                            showscale=False
+                        ),
+                        text=[f"{v:.1f}%" for v in df_service['Taux de service']],
+                        textposition='outside'
+                    )
+                ])
+                fig_service.update_layout(
+                    title='Taux de service par commande',
+                    xaxis_title='N° Commande',
+                    yaxis_title='Taux de service (%)',
+                    yaxis_range=[0, 110],
+                    showlegend=False
+                )
+                st.plotly_chart(fig_service, use_container_width=True)
+            else:
+                st.info("Aucune commande à afficher.")
+    else:
+        with col1:
+            st.metric("Articles OK", total_articles_ok)
+            st.metric("Articles avec différence", total_articles_diff)
+            st.metric("Articles manquants", total_articles_missing)
+        
+        with col2:
+            for order_num, df in results.items():
+                if not order_included(df):
+                    continue
+                total_cmd = df["qte_commande"].sum()
+                total_bl = df["qte_bl"].sum()
+                rate = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
+                st.metric(f"Commande {order_num}", f"{rate:.1f}%")
+    
+    # Tabs
+    tabs = st.tabs(["📈 Statistiques", "🏆 Top produits"])
+    
+    with tabs[0]:
+        st.markdown("### 📈 Articles manquants par code article")
+        
+        # Créer un DataFrame des articles manquants AGRÉGÉS PAR CODE ARTICLE
+        missing_by_code = {}
+        for order_num, df in results.items():
+            if not order_included(df):
+                continue
+            missing = df[df["status"] == "MISSING_IN_BL"]
+            for _, row in missing.iterrows():
+                code = row["code_article"]
+                if code not in missing_by_code:
+                    missing_by_code[code] = {
+                        "Code article": code,
+                        "Qté totale manquante": 0
+                    }
+                missing_by_code[code]["Qté totale manquante"] += int(row["qte_commande"])
+        
+        if missing_by_code:
+            df_missing = pd.DataFrame(list(missing_by_code.values()))
+            df_missing = df_missing.sort_values("Qté totale manquante", ascending=False).head(10)
+            
+            st.markdown("#### Top 10 des codes articles manquants")
+            st.dataframe(df_missing, use_container_width=True, hide_index=True)
+        else:
+            st.success("✅ Aucun article manquant !")
+    
+    with tabs[1]:
+        st.markdown("### 🏆 Classement des produits")
+        
+        all_products = []
+        for order_num, df in results.items():
+            if not order_included(df):
+                continue
+            for _, row in df.iterrows():
+                all_products.append({
+                    "Code article": row["code_article"],
+                    "EAN": row["ref"],
+                    "Qté commandée": int(row["qte_commande"]),
+                    "Qté livrée": int(row["qte_bl"])
+                })
+        
+        df_products = pd.DataFrame(all_products) if all_products else pd.DataFrame(columns=["Code article", "EAN", "Qté commandée", "Qté livrée"])
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### 📦 Top 10 commandés")
+            if not df_products.empty:
+                top_cmd = df_products.groupby("Code article")["Qté commandée"].sum().sort_values(ascending=False).head(10)
+                st.dataframe(top_cmd.reset_index(), use_container_width=True, hide_index=True)
+            else:
+                st.info("Aucun produit à afficher.")
+        
+        with col2:
+            st.markdown("#### 📋 Top 10 livrés")
+            if not df_products.empty:
+                top_livre = df_products.groupby("Code article")["Qté livrée"].sum().sort_values(ascending=False).head(10)
+                st.dataframe(top_livre.reset_index(), use_container_width=True, hide_index=True)
+            else:
+                st.info("Aucun produit à afficher.")
 
 else:
     st.info("👆 Téléversez vos fichiers et lancez la comparaison pour commencer")
 
-    # --- Signature 5 étoiles ---
+# Signature
 st.markdown("""
 <div style='text-align: center; margin-top: 40px; font-size: 18px; color: #888;'>
     ⭐⭐⭐⭐⭐<br>
     <strong>Powered by IC - 2025</strong>
 </div>
 """, unsafe_allow_html=True)
-
-
