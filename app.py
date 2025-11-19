@@ -7,14 +7,13 @@ from collections import defaultdict
 from datetime import datetime
 import time
 
-# Vérifier si plotly est disponible
 try:
     import plotly.express as px
     import plotly.graph_objects as go
     PLOTLY_AVAILABLE = True
 except ImportError:
     PLOTLY_AVAILABLE = False
-    st.warning("⚠️ Plotly non installé. Les graphiques ne seront pas affichés. Installez-le avec: `pip install plotly`")
+    st.warning("⚠️ Plotly non installé. Les graphiques ne seront pas affichés.")
 
 import base64
 
@@ -24,7 +23,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Convertir l'image en base64 (pour HTML)
 with open("Desathor.png", "rb") as f:
     data = f.read()
 encoded = base64.b64encode(data).decode()
@@ -33,25 +31,18 @@ st.markdown(
     f"""
     <div style="display: flex; flex-direction: column; align-items: center; margin-top: 40px;">
         <img src="data:image/png;base64,{encoded}" style="width:300px; max-width:80%; height:auto;">
-        <div style="margin-top: 20px; font-size: 18px; color: #888;">
-           
-        
+    </div>
     """,
     unsafe_allow_html=True
 )
 
-# Initialiser le session state
 if 'historique' not in st.session_state:
     st.session_state.historique = []
-
 if "key_cmd" not in st.session_state:
     st.session_state.key_cmd = "cmd_1"
 if "key_bl" not in st.session_state:
     st.session_state.key_bl = "bl_1"
 
-# --------------------------
-# Styles CSS personnalisés
-# --------------------------
 st.markdown("""
 <style>
     .main-header {
@@ -97,11 +88,7 @@ st.markdown("""
 st.markdown('<h1 class="main-header">🧾 Comparateur pour DESADV</h1>', unsafe_allow_html=True)
 st.markdown('<p class="subtitle">Analysez vos commandes et bons de livraison en quelques clics</p>', unsafe_allow_html=True)
 
-# --------------------------
-# Helpers
-# --------------------------
 def find_order_numbers_in_text(text):
-    """Extraction améliorée des numéros de commande"""
     if not text:
         return []
     patterns = [
@@ -118,7 +105,6 @@ def find_order_numbers_in_text(text):
     return found
 
 def is_valid_ean13(code):
-    """Vérifie si un code est un EAN13 valide"""
     if not code or len(code) != 13:
         return False
     if code.startswith(('302', '376')):
@@ -126,61 +112,46 @@ def is_valid_ean13(code):
     return True
 
 def extract_records_from_command_pdf(pdf_file):
-    """Extraction améliorée des données de commande"""
     records = []
     full_text = ""
-    
     try:
         with pdfplumber.open(pdf_file) as pdf:
             current_order = None
             in_data_section = False
-            
             for page in pdf.pages:
                 txt = page.extract_text() or ""
                 full_text += "\n" + txt
-                
                 lines = txt.split("\n")
-                
                 for i, ligne in enumerate(lines):
                     order_nums = find_order_numbers_in_text(ligne)
                     if order_nums:
                         current_order = order_nums[0]
-                    
                     if re.search(r"^L\s+Réf\.\s*frn\s+Code\s+ean", ligne, re.IGNORECASE):
                         in_data_section = True
                         continue
-                    
                     if re.search(r"^Récapitulatif|^Page\s+\d+", ligne, re.IGNORECASE):
                         in_data_section = False
                         continue
-                    
                     if not in_data_section:
                         continue
-                    
                     ean_matches = re.findall(r"\b(\d{13})\b", ligne)
                     valid_eans = [ean for ean in ean_matches if is_valid_ean13(ean)]
-                    
                     if not valid_eans:
                         continue
-                    
                     ean = valid_eans[0]
                     parts = ligne.split()
-                    
                     ean_pos = None
                     for idx, part in enumerate(parts):
                         if ean in part:
                             ean_pos = idx
                             break
-                    
                     ref_frn = None
                     code_article = ""
-                    
                     if ean_pos and ean_pos > 1:
                         candidate = parts[ean_pos - 1]
                         if re.match(r"^\d{3,6}$", candidate):
                             code_article = candidate
                             ref_frn = candidate
-                    
                     qty_match = re.search(r"Conditionnement\s*:\s*\d+\s+\d+(\d+)\s+(\d+)", ligne)
                     if qty_match:
                         qte = int(qty_match.group(1))
@@ -191,45 +162,35 @@ def extract_records_from_command_pdf(pdf_file):
                             qte = nums[-2] if len(nums) >= 2 else nums[-1]
                         else:
                             continue
-                    
                     records.append({
                         "ref": ean,
                         "code_article": code_article,
                         "qte_commande": qte,
                         "order_num": current_order if current_order else "__NO_ORDER__"
                     })
-                    
     except Exception as e:
         st.error(f"Erreur lecture PDF commande: {e}")
         return {"records": [], "order_numbers": [], "full_text": ""}
-    
     order_numbers = find_order_numbers_in_text(full_text)
     return {"records": records, "order_numbers": order_numbers, "full_text": full_text}
 
 def extract_records_from_bl_pdf(pdf_file):
-    """Extraction des données de bon de livraison"""
     records = []
     full_text = ""
-    
     try:
         with pdfplumber.open(pdf_file) as pdf:
             current_order = None
-            
             for page in pdf.pages:
                 txt = page.extract_text() or ""
                 full_text += "\n" + txt
-                
                 for ligne in txt.split("\n"):
                     order_nums = find_order_numbers_in_text(ligne)
                     if order_nums:
                         current_order = order_nums[0]
-                    
                     ean_matches = re.findall(r"\b(\d{13})\b", ligne)
                     valid_eans = [ean for ean in ean_matches if is_valid_ean13(ean)]
-                    
                     if not valid_eans:
                         continue
-                    
                     ean = valid_eans[0]
                     nums = re.findall(r"[\d,.]+", ligne)
                     qte = None
@@ -239,69 +200,53 @@ def extract_records_from_bl_pdf(pdf_file):
                             qte = float(candidate.replace(",", "."))
                         except:
                             continue
-                    
                     if qte is None:
                         continue
-                    
                     records.append({
                         "ref": ean,
                         "qte_bl": qte,
                         "order_num": current_order if current_order else "__NO_ORDER__"
                     })
-                    
     except Exception as e:
         st.error(f"Erreur lecture PDF BL: {e}")
         return {"records": [], "order_numbers": [], "full_text": ""}
-    
     order_numbers = find_order_numbers_in_text(full_text)
     return {"records": records, "order_numbers": order_numbers, "full_text": full_text}
 
 def calculate_service_rate(qte_cmd, qte_bl):
-    """Calcule le taux de service"""
     if pd.isna(qte_bl) or qte_cmd == 0:
         return 0
     return min((qte_bl / qte_cmd) * 100, 100)
 
-# --------------------------
-# Sidebar
-# --------------------------
 with st.sidebar:
     st.header("📁 Fichiers")
-    
     if st.button("🔄 Nouveau", use_container_width=True, type="primary"):
         st.session_state.key_cmd = f"cmd_{time.time()}"
         st.session_state.key_bl = f"bl_{time.time()}"
         st.session_state.historique = []
         st.rerun()
-    
     st.markdown("---")
-    
     commande_files = st.file_uploader(
         "📦 PDF(s) Commande client", 
         type="pdf", 
         accept_multiple_files=True,
         key=st.session_state.key_cmd
     )
-    
     bl_files = st.file_uploader(
         "📋 PDF(s) Bon de livraison", 
         type="pdf", 
         accept_multiple_files=True,
         key=st.session_state.key_bl
     )
-    
     st.markdown("---")
     st.header("⚙️ Options")
-    
     hide_unmatched = st.checkbox(
         "👁️‍🗨️ Masquer les commandes sans correspondance",
         value=True,
         help="Exclut les articles MISSING_IN_BL de l'export Excel"
     )
-    
     st.markdown("---")
     st.header("📊 Historique")
-    
     if st.session_state.historique:
         st.write(f"**{len(st.session_state.historique)}** comparaison(s)")
         if st.button("🗑️ Supprimer tout l'historique", use_container_width=True):
@@ -311,64 +256,49 @@ with st.sidebar:
     else:
         st.info("Aucune comparaison enregistrée")
 
-# --------------------------
-# Traitement
-# --------------------------
 if st.button("🔍 Lancer la comparaison", use_container_width=True, type="primary"):
     if not commande_files or not bl_files:
         st.error("⚠️ Veuillez téléverser des commandes ET des bons de livraison.")
         st.stop()
-
     with st.spinner("🔄 Analyse en cours..."):
         commandes_dict = defaultdict(list)
         all_command_records = []
-        
         for f in commande_files:
             res = extract_records_from_command_pdf(f)
             all_command_records.extend(res["records"])
             for rec in res["records"]:
                 commandes_dict[rec["order_num"]].append(rec)
-        
         for k in commandes_dict.keys():
             df = pd.DataFrame(commandes_dict[k])
             df = df.groupby(["ref", "code_article"], as_index=False).agg({"qte_commande": "sum"})
             commandes_dict[k] = df
-
         bls_dict = defaultdict(list)
         all_bl_records = []
-        
         for f in bl_files:
             res = extract_records_from_bl_pdf(f)
             all_bl_records.extend(res["records"])
             for rec in res["records"]:
                 bls_dict[rec["order_num"]].append(rec)
-        
         for k in bls_dict.keys():
             df = pd.DataFrame(bls_dict[k])
             df = df.groupby("ref", as_index=False).agg({"qte_bl": "sum"})
             bls_dict[k] = df
-
         results = {}
         for order_num, df_cmd in commandes_dict.items():
             df_bl = bls_dict.get(order_num, pd.DataFrame(columns=["ref", "qte_bl"]))
             merged = pd.merge(df_cmd, df_bl, on="ref", how="left")
-            
             merged["qte_commande"] = pd.to_numeric(merged["qte_commande"], errors="coerce").fillna(0)
             merged["qte_bl"] = pd.to_numeric(merged.get("qte_bl", pd.Series()), errors="coerce").fillna(0)
-            
             def status_row(r):
                 if r["qte_bl"] == 0:
                     return "MISSING_IN_BL"
                 return "OK" if r["qte_commande"] == r["qte_bl"] else "QTY_DIFF"
-            
             merged["status"] = merged.apply(status_row, axis=1)
             merged["diff"] = merged["qte_bl"] - merged["qte_commande"]
             merged["taux_service"] = merged.apply(
                 lambda r: calculate_service_rate(r["qte_commande"], r["qte_bl"]), axis=1
             )
-            
             results[order_num] = merged
-        
         comparison_data = {
             "timestamp": datetime.now(),
             "results": results,
@@ -378,9 +308,6 @@ if st.button("🔍 Lancer la comparaison", use_container_width=True, type="prima
         }
         st.session_state.historique.append(comparison_data)
 
-# --------------------------
-# Affichage des résultats
-# --------------------------
 if st.session_state.historique:
     latest = st.session_state.historique[-1]
     results = latest["results"]
@@ -393,71 +320,36 @@ if st.session_state.historique:
         if hide_unmatched and total_bl == 0:
             return False
         return True
-
-    # Calculer les KPIs globaux
+    
     total_commande = sum([df["qte_commande"].sum() for df in results.values() if order_included(df)])
     total_livre = sum([df["qte_bl"].sum() for df in results.values() if order_included(df)])
     total_manquant = total_commande - total_livre
     taux_service_global = (total_livre / total_commande * 100) if total_commande > 0 else 0
-    
     total_articles_ok = sum([(df["status"] == "OK").sum() for df in results.values() if order_included(df)])
     total_articles_diff = sum([(df["status"] == "QTY_DIFF").sum() for df in results.values() if order_included(df)])
     total_articles_missing = sum([(df["status"] == "MISSING_IN_BL").sum() for df in results.values() if order_included(df)])
     
-    # ======================
-    # 1. DÉTAILS PAR COMMANDE
-    # ======================
     st.markdown("### 📋 Détails par commande")
-    
     for order_num, df in results.items():
         if not order_included(df):
             continue
-
         n_ok = (df["status"] == "OK").sum()
         n_diff = (df["status"] == "QTY_DIFF").sum()
         n_miss = (df["status"] == "MISSING_IN_BL").sum()
-        
         total_cmd = df["qte_commande"].sum()
         total_bl = df["qte_bl"].sum()
         taux = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
-        
         with st.expander(
             f"📦 Commande **{order_num}** — Taux de service: **{taux:.1f}%** | "
             f"✅ {n_ok} | ⚠️ {n_diff} | ❌ {n_miss}"
         ):
             col1, col2, col3 = st.columns(3)
             with col1:
-            st.markdown("#### 📦 Top 10 commandés")
-            if not df_products.empty:
-                top_cmd = df_products.groupby("Code article")["Qté commandée"].sum().sort_values(ascending=False).head(10)
-                st.dataframe(top_cmd.reset_index(), use_container_width=True, hide_index=True)
-            else:
-                st.info("Aucun produit à afficher.")
-        
-        with col2:
-            st.markdown("#### 📋 Top 10 livrés")
-            if not df_products.empty:
-                top_livre = df_products.groupby("Code article")["Qté livrée"].sum().sort_values(ascending=False).head(10)
-                st.dataframe(top_livre.reset_index(), use_container_width=True, hide_index=True)
-            else:
-                st.info("Aucun produit à afficher.")
-
-else:
-    st.info("👆 Téléversez vos fichiers et lancez la comparaison pour commencer")
-
-# Signature
-st.markdown("""
-<div style='text-align: center; margin-top: 40px; font-size: 18px; color: #888;'>
-    ⭐⭐⭐⭐⭐<br>
-    <strong>Powered by IC - 2025</strong>
-</div>
-""", unsafe_allow_html=True)
                 st.metric("Commandé", int(total_cmd))
             with col2:
                 st.metric("Livré", int(total_bl))
             with col3:
                 st.metric("Manquant", int(total_cmd - total_bl))
-            
             def color_status(val):
                 if val == "OK":
                     return "background-color: #d4edda"
@@ -466,40 +358,30 @@ st.markdown("""
                 if val == "MISSING_IN_BL":
                     return "background-color: #f8d7da"
                 return ""
-            
             st.dataframe(
                 df.style.applymap(color_status, subset=["status"]),
                 use_container_width=True,
                 height=400
             )
     
-    # ======================
-    # 2. EXPORT EXCEL
-    # ======================
     st.markdown("---")
     st.markdown("### 📥 Export")
-    
     output = io.BytesIO()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"Comparaison_{timestamp}.xlsx"
-    
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         for order_num, df in results.items():
             total_bl = df["qte_bl"].sum() if "qte_bl" in df.columns else 0
             if hide_unmatched and total_bl == 0:
                 continue
-
             df_export = df.copy()
             sheet_name = f"C_{order_num}"[:31]
             df_export.to_excel(writer, sheet_name=sheet_name, index=False)
-            
             workbook = writer.book
             worksheet = writer.sheets[sheet_name]
-            
             ok_format = workbook.add_format({'bg_color': '#d4edda'})
             diff_format = workbook.add_format({'bg_color': '#fff3cd'})
             miss_format = workbook.add_format({'bg_color': '#f8d7da'})
-            
             for idx, row in df_export.iterrows():
                 excel_row = idx + 1
                 if row.get('status') == 'OK':
@@ -508,7 +390,6 @@ st.markdown("""
                     worksheet.set_row(excel_row, None, diff_format)
                 elif row.get('status') == 'MISSING_IN_BL':
                     worksheet.set_row(excel_row, None, miss_format)
-        
         summary_data = {
             'Commande': [],
             'Taux de service (%)': [],
@@ -519,16 +400,13 @@ st.markdown("""
             'Articles différence': [],
             'Articles manquants': []
         }
-        
         for order_num, df in results.items():
             total_bl = df["qte_bl"].sum() if "qte_bl" in df.columns else 0
             if hide_unmatched and total_bl == 0:
                 continue
-
             total_cmd = df["qte_commande"].sum()
             total_bl = df["qte_bl"].sum()
             taux = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
-            
             summary_data['Commande'].append(order_num)
             summary_data['Taux de service (%)'].append(round(taux, 2))
             summary_data['Qté commandée'].append(int(total_cmd))
@@ -537,10 +415,8 @@ st.markdown("""
             summary_data['Articles OK'].append((df["status"] == "OK").sum())
             summary_data['Articles différence'].append((df["status"] == "QTY_DIFF").sum())
             summary_data['Articles manquants'].append((df["status"] == "MISSING_IN_BL").sum())
-        
         df_summary = pd.DataFrame(summary_data)
         df_summary.to_excel(writer, sheet_name="Récapitulatif", index=False)
-    
     col1, col2 = st.columns([3, 1])
     with col1:
         st.download_button(
@@ -555,14 +431,9 @@ st.markdown("""
             st.session_state.historique.pop()
             st.rerun()
     
-    # ======================
-    # 3. VUE D'ENSEMBLE
-    # ======================
     st.markdown("---")
     st.markdown("### 📊 Vue d'ensemble")
-    
     col1, col2, col3, col4 = st.columns(4)
-    
     with col1:
         st.markdown(f"""
         <div class="kpi-card success-card">
@@ -570,7 +441,6 @@ st.markdown("""
             <div class="kpi-value">{taux_service_global:.1f}%</div>
         </div>
         """, unsafe_allow_html=True)
-    
     with col2:
         st.markdown(f"""
         <div class="kpi-card info-card">
@@ -578,7 +448,6 @@ st.markdown("""
             <div class="kpi-value">{int(total_commande)}</div>
         </div>
         """, unsafe_allow_html=True)
-    
     with col3:
         st.markdown(f"""
         <div class="kpi-card">
@@ -586,7 +455,6 @@ st.markdown("""
             <div class="kpi-value">{int(total_livre)}</div>
         </div>
         """, unsafe_allow_html=True)
-    
     with col4:
         st.markdown(f"""
         <div class="kpi-card warning-card">
@@ -594,19 +462,15 @@ st.markdown("""
             <div class="kpi-value">{int(total_manquant)}</div>
         </div>
         """, unsafe_allow_html=True)
-    
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # Graphiques
     col1, col2 = st.columns(2)
-    
     if PLOTLY_AVAILABLE:
         with col1:
             status_data = pd.DataFrame({
                 'Statut': ['✅ OK', '⚠️ Différence', '❌ Manquant'],
                 'Nombre': [total_articles_ok, total_articles_diff, total_articles_missing]
             })
-            
             fig_status = px.pie(
                 status_data, 
                 values='Nombre', 
@@ -616,9 +480,7 @@ st.markdown("""
             )
             fig_status.update_traces(textposition='inside', textinfo='percent+label')
             st.plotly_chart(fig_status, use_container_width=True)
-        
         with col2:
-            # Taux de service par commande - HISTOGRAMME
             service_rates = []
             for order_num, df in results.items():
                 if not order_included(df):
@@ -627,10 +489,9 @@ st.markdown("""
                 total_bl = df["qte_bl"].sum()
                 rate = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
                 service_rates.append({
-                    'Commande': str(order_num),  # Convertir en string
+                    'Commande': str(order_num),
                     'Taux de service': rate
                 })
-            
             df_service = pd.DataFrame(service_rates)
             if not df_service.empty:
                 fig_service = go.Figure(data=[
@@ -663,7 +524,6 @@ st.markdown("""
             st.metric("Articles OK", total_articles_ok)
             st.metric("Articles avec différence", total_articles_diff)
             st.metric("Articles manquants", total_articles_missing)
-        
         with col2:
             for order_num, df in results.items():
                 if not order_included(df):
@@ -673,9 +533,7 @@ st.markdown("""
                 rate = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
                 st.metric(f"Commande {order_num}", f"{rate:.1f}%")
     
-    # Tabs
     tabs = st.tabs(["📈 Statistiques", "🏆 Top produits"])
-    
     with tabs[0]:
         st.markdown("### 📈 Articles manquants par code article")
         missing_by_code = {}
@@ -688,7 +546,6 @@ st.markdown("""
                 if code not in missing_by_code:
                     missing_by_code[code] = {"Code article": code, "Qté totale manquante": 0}
                 missing_by_code[code]["Qté totale manquante"] += int(row["qte_commande"])
-        
         if missing_by_code:
             df_missing = pd.DataFrame(list(missing_by_code.values()))
             df_missing = df_missing.sort_values("Qté totale manquante", ascending=False).head(10)
@@ -696,7 +553,6 @@ st.markdown("""
             st.dataframe(df_missing, use_container_width=True, hide_index=True)
         else:
             st.success("✅ Aucun article manquant !")
-    
     with tabs[1]:
         st.markdown("### 🏆 Classement des produits")
         all_products = []
@@ -704,13 +560,16 @@ st.markdown("""
             if not order_included(df):
                 continue
             for _, row in df.iterrows():
-                all_products.append({"Code article": row["code_article"], "EAN": row["ref"], "Qté commandée": int(row["qte_commande"]), "Qté livrée": int(row["qte_bl"])})
-        
+                all_products.append({
+                    "Code article": row["code_article"],
+                    "EAN": row["ref"],
+                    "Qté commandée": int(row["qte_commande"]),
+                    "Qté livrée": int(row["qte_bl"])
+                })
         if all_products:
             df_products = pd.DataFrame(all_products)
         else:
             df_products = pd.DataFrame(columns=["Code article", "EAN", "Qté commandée", "Qté livrée"])
-        
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("#### 📦 Top 10 commandés")
@@ -726,11 +585,9 @@ st.markdown("""
                 st.dataframe(top_livre.reset_index(), use_container_width=True, hide_index=True)
             else:
                 st.info("Aucun produit à afficher.")
-
 else:
     st.info("👆 Téléversez vos fichiers et lancez la comparaison pour commencer")
 
-# Signature
 st.markdown("""
 <div style='text-align: center; margin-top: 40px; font-size: 18px; color: #888;'>
     ⭐⭐⭐⭐⭐<br>
