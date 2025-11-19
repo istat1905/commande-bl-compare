@@ -1136,46 +1136,6 @@ if st.session_state.historique:
 else:
     st.info("👆 Téléversez vos fichiers et lancez la comparaison pour commencer")
 
-# Affichage des DESADV si disponibles
-if hasattr(st.session_state, 'desadv_data') and st.session_state.desadv_data and not st.session_state.historique:
-    st.markdown("---")
-    st.markdown("## 📦 DESADV à traiter")
-    st.markdown(f"**📅 Date de livraison:** {st.session_state.desadv_date}")
-    
-    auchan = st.session_state.desadv_data.get("auchan", [])
-    edi1 = st.session_state.desadv_data.get("edi1", [])
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("### 🟦 AUCHAN")
-        if auchan:
-            total_montant = sum([d["montant_total"] for d in auchan])
-            st.metric("Montant total", f"{total_montant:,.2f} €")
-            st.metric("Nombre de DESADV", len(auchan))
-            
-            for idx, desadv in enumerate(auchan, 1):
-                with st.expander(f"📦 {desadv['entrepot']}", expanded=False):
-                    st.markdown(f"**Montant:** {desadv['montant_total']:,.2f} €")
-                    st.markdown(f"**Commandes ({desadv['nb_commandes']}):**")
-                    for cmd in desadv['commandes']:
-                        st.write(f"- {cmd}")
-        else:
-            st.info("Aucun DESADV Auchan")
-    
-    with col2:
-        st.markdown("### 🟩 EDI1")
-        if edi1:
-            st.metric("Nombre de DESADV", len(edi1))
-            
-            for idx, desadv in enumerate(edi1, 1):
-                with st.expander(f"📦 {desadv['entrepot']}", expanded=False):
-                    st.markdown(f"**Commandes ({desadv['nb_commandes']}):**")
-                    for cmd in desadv['commandes']:
-                        st.write(f"- {cmd}")
-        else:
-            st.info("Aucun DESADV EDI1")
-
 # Modal d'aide / Configuration / Gestion utilisateurs
 if st.session_state.show_help == "manage_users":
     st.markdown("---")
