@@ -295,7 +295,7 @@ def calculate_service_rate(qte_cmd, qte_bl):
 def fetch_desadv_from_auchan():
     """
     Connexion RÉELLE au site Auchan ATGPEDI
-    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Application du filtre de date (Simulation 'Entrée').
+    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Application du filtre de date (Injection POST manuelle).
     """
     from datetime import datetime, timedelta
     import requests
@@ -342,55 +342,23 @@ def fetch_desadv_from_auchan():
         else:
              params = {"query": "documents_commandes_liste", "page": "documents_commandes_liste"}
              response = session.get(base_url, params=params, timeout=15)
-             post_url = response.url
+             post_url = response.url # L'URL après navigation
 
-        # 3. Application du filtre de date (Simulation 'Entrée')
-        soup = BeautifulSoup(response.content, 'html.parser')
+        # 3. Application du filtre de date (Injection POST Forcée)
+        # On utilise l'URL post_url (gui.php?page=documents_commandes_liste)
         
-        # Recherche la plus robuste pour le champ de date
-        date_input = soup.find('input', {'name': 'doDateHeureDemandee'})
+        # Ce payload est reconstitué manuellement pour simuler l'appui sur "Entrée"
+        # Il doit contenir les champs cachés essentiels et la date de filtre
+        forced_post_data = {
+            'page': 'documents_commandes_liste',          # Assure le contexte de la page
+            'doDateHeureDemandee': tomorrow,              # Le champ de date
+            'typeDate': 'LIVR',                           # Type de date de livraison (paramètre ATGPEDI standard)
+            'lines_per_page': '1000'                      # Afficher toutes les lignes
+            # Pas de 'submit' ou autre bouton pour simuler l'appui sur 'Entrée'
+        }
         
-        form_data = {}
-        submit_url = post_url
-        form_method = 'POST' 
-        
-        if date_input:
-            filter_form = date_input.find_parent('form') or soup.find('form')
-            
-            if filter_form:
-                form_action = filter_form.get('action', post_url)
-                form_method = filter_form.get('method', 'post').upper()
-                submit_url = urljoin(post_url, form_action)
-
-                # Récupérer TOUS les champs du formulaire (cachés inclus)
-                for input_tag in filter_form.find_all(['input', 'select', 'textarea']):
-                    name = input_tag.get('name')
-                    value = input_tag.get('value', '')
-                    if name and input_tag.get('type') != 'submit': # IMPORTANT: Exclusion du submit
-                        form_data[name] = value
-            
-            # --- Cas où le formulaire est absent (soumission manuelle vers la même URL) ---
-            else:
-                 # Récupérer les champs cachés essentiels à la page
-                for input_tag in soup.find_all('input', {'type': 'hidden'}):
-                    name = input_tag.get('name')
-                    value = input_tag.get('value', '')
-                    if name:
-                        form_data[name] = value
-
-        # Si le champ de date n'est pas trouvé, on lève l'alerte
-        else:
-            html_snippet = response.text[:2000].replace('\n', ' ').replace('\r', '').strip()
-            return [], tomorrow, f"❌ DEBUG HTML AUCHAN (Champ de date 'doDateHeureDemandee' introuvable): {html_snippet}"
-
-        # Surcharge du champ de date
-        form_data['doDateHeureDemandee'] = tomorrow
-        
-        # Soumettre le formulaire filtré (simule 'Entrée' car aucun submit n'est envoyé)
-        if form_method == 'POST':
-            response = session.post(submit_url, data=form_data, timeout=15)
-        else: 
-            response = session.get(submit_url, params=form_data, timeout=15)
+        # Utilisation de la méthode POST pour soumettre les données de filtre
+        response = session.post(post_url, data=forced_post_data, timeout=15)
         
         # 4. Traitement de la page après filtrage
         soup = BeautifulSoup(response.content, 'html.parser')
@@ -427,7 +395,7 @@ def fetch_desadv_from_auchan():
         if not table:
             # Échec final avec DEBUG HTML
             html_snippet = response.text[:2000].replace('\n', ' ').replace('\r', '').strip()
-            return [], tomorrow, f"❌ DEBUG HTML AUCHAN (Tableau introuvable après filtre): {html_snippet}"
+            return [], tomorrow, f"❌ DEBUG HTML AUCHAN (Tableau introuvable après filtre POST): {html_snippet}"
         
         # Le reste du parsing (inchangé)
         commandes_brutes = []
