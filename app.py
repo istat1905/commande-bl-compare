@@ -292,10 +292,11 @@ def calculate_service_rate(qte_cmd, qte_bl):
 # FONCTIONS DESADV (CORRIGEES & SANS SIMULATION)
 # ============================================
 
+
 def fetch_desadv_from_auchan():
     """
     Connexion RÉELLE au site Auchan ATGPEDI
-    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Application du filtre de date.
+    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Application du filtre de date (POST ciblé).
     """
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
     
@@ -330,10 +331,9 @@ def fetch_desadv_from_auchan():
 
         soup = BeautifulSoup(response.content, 'html.parser')
 
-        # 2. Navigation : Recherche du lien "Commandes" (gui.php)
+        # 2. Navigation : Clic sur le lien "Commandes" (gui.php)
         commande_link = soup.find('a', href=re.compile(r'gui\.php.*documents?_commandes?_liste'))
         
-        # On utilise l'URL de la page des commandes (soit le lien trouvé, soit le fallback)
         post_url = None
         if commande_link and 'href' in commande_link.attrs:
             post_url = urljoin(base_url, commande_link['href'])
@@ -343,23 +343,44 @@ def fetch_desadv_from_auchan():
              response = session.get(base_url, params=params, timeout=15)
              post_url = response.url # URL après le GET
 
-        # 3. Application du filtre de date (POST)
+        # 3. Application du filtre de date (POST/GET CIBLÉ)
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        form_data = {}
-        # Collecter tous les champs de formulaire (cachés ou visibles)
-        for input_tag in soup.find_all(['input', 'select', 'textarea']):
-            name = input_tag.get('name')
-            value = input_tag.get('value', '')
-            if name:
-                form_data[name] = value
+        # A. Tenter de trouver le formulaire qui contient le champ de date
+        date_input = soup.find('input', {'name': 'doDateHeureDemandee'})
+        filter_form = None
+        if date_input:
+            filter_form = date_input.find_parent('form')
 
-        # Surcharge du champ de date avec la date de demain
-        form_data['doDateHeureDemandee'] = tomorrow
-        
-        # Soumettre le formulaire filtré
-        response = session.post(post_url, data=form_data, timeout=15)
-        
+        if filter_form:
+            # URL de soumission et méthode
+            form_action = filter_form.get('action', post_url)
+            form_method = filter_form.get('method', 'post').upper()
+            submit_url = urljoin(post_url, form_action)
+
+            form_data = {}
+            # B. Collecter TOUS les champs du formulaire spécifique
+            for input_tag in filter_form.find_all(['input', 'select', 'textarea']):
+                name = input_tag.get('name')
+                # La valeur doit être récupérée si c'est un champ caché/par défaut,
+                # sinon elle sera surchargée par notre date
+                value = input_tag.get('value', '') 
+                if name:
+                    form_data[name] = value
+
+            # C. Surcharge du champ de date avec la date de demain
+            form_data['doDateHeureDemandee'] = tomorrow
+            
+            # D. Soumettre le formulaire filtré avec la bonne méthode
+            if form_method == 'POST':
+                response = session.post(submit_url, data=form_data, timeout=15)
+            else: # GET
+                response = session.get(submit_url, params=form_data, timeout=15)
+        else:
+            # Si le formulaire n'est pas trouvé (nouvelle structure), on retourne l'erreur DEBUG
+            html_snippet = response.text[:2000].replace('\n', ' ').replace('\r', '').strip()
+            return [], tomorrow, f"❌ DEBUG HTML AUCHAN (Formulaire de date introuvable): {html_snippet}"
+
         # 4. Traitement de la page après filtrage
         soup = BeautifulSoup(response.content, 'html.parser')
         
@@ -368,18 +389,15 @@ def fetch_desadv_from_auchan():
             
         # --- RECHERCHE ULTIME DU TABLEAU ---
         table = None
-        
         column_indicators = ["commande", "livraison", "montant"] 
         all_tables = soup.find_all('table')
         
         for t in all_tables:
-            # Recherche par classe ou ID
             if 'datalist' in t.get('class', []):
                 table = t; break
             if re.search(r'data_?list|data_?table|display|dataTable|list|grid', t.get('class', [''])[0], re.IGNORECASE):
                 table = t; break
             
-            # Recherche par contenu d'en-tête
             header_row = t.find(['thead', 'tr']) 
             if header_row:
                 header_text = header_row.text.lower()
@@ -387,7 +405,6 @@ def fetch_desadv_from_auchan():
                 if matches >= 2:
                     table = t; break
         
-        # Chercher le conteneur du tableau (très agressif)
         if not table:
             header_text_element = soup.find(string=re.compile(r'N\s?°\s?commande', re.IGNORECASE))
             if header_text_element:
@@ -397,11 +414,14 @@ def fetch_desadv_from_auchan():
         # --- FIN RECHERCHE ---
         
         if not table:
-            return [], tomorrow, "⚠️ Échec: Tableau introuvable après application du filtre de date."
+            # Échec final, on retourne le DEBUG HTML de la page des commandes (post-filtre)
+            html_snippet = response.text[:2000].replace('\n', ' ').replace('\r', '').strip()
+            return [], tomorrow, f"❌ DEBUG HTML AUCHAN (Tableau introuvable après filtre): {html_snippet}"
         
         # Le reste du parsing (inchangé)
         commandes_brutes = []
         rows = table.find_all('tr')
+        # ... [Reste du code de parsing et de regroupement des commandes] ...
         
         for row in rows[1:]:
             cols = row.find_all('td')
@@ -426,7 +446,6 @@ def fetch_desadv_from_auchan():
                 
                 entrepot = cols[2].text.strip() if len(cols) > 2 else ""
                 
-                # Le filtrage par date se fait maintenant sur le site, mais on garde la vérif de sécurité
                 if montant > 0:
                     commandes_brutes.append({
                         "numero": numero,
