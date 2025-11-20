@@ -1237,7 +1237,7 @@ st.markdown("""
     ⭐⭐⭐⭐⭐<br>
     <strong>Powered by IC - 2025</strong>
 </div>
-""", unsafe_allow_html=True), text):
+""", unsafe_allow_html=True):
                         try:
                             montant = float(text)
                             break
