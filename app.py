@@ -531,7 +531,7 @@ def fetch_desadv_from_edi1_real():
                 montant = None
                 for col in cols:
                     text = col.text.strip().replace(" ", "").replace(",", ".")
-                    if re.match(r'^\d+\.\d{2}
+                    if re.match(r'^\d+\.\d{2}', some_variable):
 
 def fetch_desadv_from_auchan():
     """Version avec fallback pour Auchan"""
