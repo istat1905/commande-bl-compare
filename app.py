@@ -292,11 +292,10 @@ def calculate_service_rate(qte_cmd, qte_bl):
 # FONCTIONS DESADV (CORRIGEES & SANS SIMULATION)
 # ============================================
 
-
 def fetch_desadv_from_auchan():
     """
     Connexion RÉELLE au site Auchan ATGPEDI
-    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Application du filtre de date (POST sans bouton submit).
+    DEBUG: Force l'affichage du HTML si le formulaire de filtre de date est introuvable.
     """
     from datetime import datetime, timedelta
     import requests
@@ -350,10 +349,13 @@ def fetch_desadv_from_auchan():
         
         date_input = soup.find('input', {'name': 'doDateHeureDemandee'})
         filter_form = None
+        
         if date_input:
+            # Tente de trouver le formulaire parent (recherche flexible)
             filter_form = date_input.find_parent('form')
         
         if not filter_form:
+            # Tente de trouver le premier formulaire (le plus courant)
             filter_form = soup.find('form')
 
         if filter_form:
@@ -365,21 +367,20 @@ def fetch_desadv_from_auchan():
             for input_tag in filter_form.find_all(['input', 'select', 'textarea']):
                 name = input_tag.get('name')
                 value = input_tag.get('value', '')
-                if name and input_tag.get('type') != 'submit': # IMPORTANT: ne pas inclure les boutons submit
+                if name and input_tag.get('type') != 'submit':
                     form_data[name] = value
 
-            # Surcharge du champ de date avec la date de demain
+            # Surcharge du champ de date
             form_data['doDateHeureDemandee'] = tomorrow
             
-            # Pas d'ajout de paramètre submit=... pour simuler la touche "Entrée"
-            
-            # Soumettre le formulaire filtré
             if form_method == 'POST':
                 response = session.post(submit_url, data=form_data, timeout=15)
             else: 
                 response = session.get(submit_url, params=form_data, timeout=15)
         else:
-            return [], tomorrow, "❌ Échec: Formulaire de filtre de date introuvable."
+            # >>> ACTION DE DEBUG FORCÉE : Affiche le HTML si le formulaire est introuvable.
+            html_snippet = response.text[:2000].replace('\n', ' ').replace('\r', '').strip()
+            return [], tomorrow, f"❌ DEBUG HTML AUCHAN (Formulaire introuvable): {html_snippet}"
         
         # 4. Traitement de la page après filtrage
         soup = BeautifulSoup(response.content, 'html.parser')
@@ -387,12 +388,13 @@ def fetch_desadv_from_auchan():
         if "Aucun document" in response.text:
             return [], tomorrow, "success"
             
-        # --- RECHERCHE ULTIME DU TABLEAU (Logique de recherche agressive) ---
+        # --- RECHERCHE ULTIME DU TABLEAU ---
         table = None
         column_indicators = ["commande", "livraison", "montant"] 
         all_tables = soup.find_all('table')
         
         for t in all_tables:
+            # ... Logique de recherche du tableau (identique) ...
             if 'datalist' in t.get('class', []):
                 table = t; break
             if re.search(r'data_?list|data_?table|display|dataTable|list|grid', t.get('class', [''])[0], re.IGNORECASE):
@@ -421,6 +423,7 @@ def fetch_desadv_from_auchan():
         # Le reste du parsing (inchangé)
         commandes_brutes = []
         rows = table.find_all('tr')
+        # ... [Reste du code de parsing et de regroupement des commandes] ...
         
         for row in rows[1:]:
             cols = row.find_all('td')
@@ -476,21 +479,23 @@ def fetch_desadv_from_auchan():
 
     except Exception as e:
         return [], tomorrow, f"❌ Erreur technique Auchan: {str(e)}"
-
+        
 def fetch_desadv_from_edi1():
     """
     Connexion RÉELLE au site EDI1 ATGPEDI
-    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Recherche ultra-robuste du tableau.
+    DEBUG: Force l'affichage du HTML si le formulaire de filtre de date est introuvable.
     """
+    from datetime import datetime, timedelta
+    import requests
+    from bs4 import BeautifulSoup
+    import os
+    from urllib.parse import urljoin
+    import re
+    import streamlit as st 
+    
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
     
     try:
-        import requests
-        from bs4 import BeautifulSoup
-        import os
-        from urllib.parse import urljoin
-        import re
-        
         session = requests.Session()
         
         try:
@@ -514,38 +519,70 @@ def fetch_desadv_from_edi1():
 
         soup = BeautifulSoup(response.content, 'html.parser')
 
-        # 2. Navigation : Recherche du lien "Commandes" (gui.php)
+        # 2. Navigation : Clic sur le lien "Commandes" (gui.php)
         commande_link = soup.find('a', href=re.compile(r'gui\.php.*documents?_commandes?_liste'))
         
+        post_url = None
         if commande_link and 'href' in commande_link.attrs:
-            new_url = urljoin(base_url, commande_link['href'])
-            response = session.get(new_url, timeout=15)
+            post_url = urljoin(base_url, commande_link['href'])
+            response = session.get(post_url, timeout=15)
         else:
-            # Fallback vers l'ancienne URL directe si le lien n'est pas trouvé
             params = {"query": "documents_commandes_liste", "page": "documents_commandes_liste", "lines_per_page": "1000"}
             response = session.get(base_url, params=params, timeout=15)
+            post_url = response.url
+
+        # 3. Application du filtre de date (POST/GET CIBLÉ sans signal de soumission)
+        soup = BeautifulSoup(response.content, 'html.parser')
         
-        # 3. Traitement de la page de la liste des commandes
+        date_input = soup.find('input', {'name': 'doDateHeureDemandee'})
+        filter_form = None
+        if date_input:
+            filter_form = date_input.find_parent('form')
+        
+        if not filter_form:
+            filter_form = soup.find('form')
+
+        if filter_form:
+            form_action = filter_form.get('action', post_url)
+            form_method = filter_form.get('method', 'post').upper()
+            submit_url = urljoin(post_url, form_action)
+
+            form_data = {}
+            for input_tag in filter_form.find_all(['input', 'select', 'textarea']):
+                name = input_tag.get('name')
+                value = input_tag.get('value', '')
+                if name and input_tag.get('type') != 'submit':
+                    form_data[name] = value
+
+            form_data['doDateHeureDemandee'] = tomorrow
+            
+            if form_method == 'POST':
+                response = session.post(submit_url, data=form_data, timeout=15)
+            else: 
+                response = session.get(submit_url, params=form_data, timeout=15)
+        else:
+            # >>> ACTION DE DEBUG FORCÉE : Affiche le HTML si le formulaire est introuvable.
+            html_snippet = response.text[:2000].replace('\n', ' ').replace('\r', '').strip()
+            return [], tomorrow, f"❌ DEBUG HTML EDI1 (Formulaire introuvable): {html_snippet}"
+        
+        # 4. Traitement de la page après filtrage
         soup = BeautifulSoup(response.content, 'html.parser')
 
         if "Aucun document" in response.text:
             return [], tomorrow, "success"
 
-        # --- RECHERCHE ULTIME DU TABLEAU (Améliorée) ---
+        # --- RECHERCHE ULTIME DU TABLEAU ---
         table = None
-        
-        # Tentative 1: Recherche par ID, Classe ou contenu d'en-tête (méthodes robustes)
-        column_indicators = ["commande", "livraison", "montant"] 
+        column_indicators = ["commande", "livraison", "montant"]
         all_tables = soup.find_all('table')
         
         for t in all_tables:
-            # Recherche par classe ou ID
+            # ... Logique de recherche du tableau (identique) ...
             if 'datalist' in t.get('class', []):
                 table = t; break
             if re.search(r'data_?list|data_?table|display|dataTable|list|grid', t.get('class', [''])[0], re.IGNORECASE):
                 table = t; break
             
-            # Recherche par contenu d'en-tête
             header_row = t.find(['thead', 'tr']) 
             if header_row:
                 header_text = header_row.text.lower()
@@ -553,7 +590,6 @@ def fetch_desadv_from_edi1():
                 if matches >= 2:
                     table = t; break
         
-        # Tentative 2: Chercher le conteneur du tableau (très agressif)
         if not table:
             header_text_element = soup.find(string=re.compile(r'N\s?°\s?commande', re.IGNORECASE))
             if header_text_element:
@@ -563,16 +599,17 @@ def fetch_desadv_from_edi1():
         # --- FIN RECHERCHE ---
         
         if not table:
-            return [], tomorrow, "⚠️ Tableau introuvable sur EDI1 (Structure HTML inconnue après navigation)"
+            html_snippet = response.text[:2000].replace('\n', ' ').replace('\r', '').strip()
+            return [], tomorrow, f"❌ DEBUG HTML EDI1 (Tableau introuvable après filtre): {html_snippet}"
 
         clients_autorises = [
-            "ETABLISSEMENT DOLE", "ENTREPOT CSD produits frais", "ITM LUXEMONT-ET-VILLOTTE"
+            "INTERMARCHE", "DEPOT CSD ALBY SUR CHERAN", "ITM LUXEMONT-ET-VILLOTTE"
         ]
         
+        # Le reste du parsing (inchangé)
         commandes_brutes = []
         rows = table.find_all('tr')[1:]
         
-        # Parsing du tableau
         for row in rows:
             cols = row.find_all('td')
             if len(cols) < 7: continue
@@ -586,13 +623,13 @@ def fetch_desadv_from_edi1():
                 montant = float(montant_text.replace(" ", "").replace(",", "."))
                 
                 if any(c in client.upper() for c in clients_autorises):
-                    if date_livraison == tomorrow:
+                    if montant > 0:
                         commandes_brutes.append({
                             "numero": numero,
                             "client": client,
                             "entrepot": entrepot,
                             "montant": montant,
-                            "date_livraison": date_livraison
+                            "date_livraison": date_livraison if date_livraison else tomorrow
                         })
             except: continue
             
