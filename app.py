@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 import time
 import base64
 import os
+import requests
+from bs4 import BeautifulSoup
 
 # Gestion optionnelle de Plotly
 try:
@@ -153,7 +155,7 @@ if not PLOTLY_AVAILABLE:
     st.warning("⚠️ Plotly non installé. Les graphiques ne seront pas affichés.")
 
 # ============================================
-# FONCTIONS UTILITAIRES
+# FONCTIONS UTILITAIRES PDF
 # ============================================
 
 def find_order_numbers_in_text(text):
@@ -287,179 +289,148 @@ def calculate_service_rate(qte_cmd, qte_bl):
     return min((qte_bl / qte_cmd) * 100, 100)
 
 # ============================================
-# FONCTIONS DESADV
+# FONCTIONS DESADV (CORRIGEES & SANS SIMULATION)
 # ============================================
 
-def fetch_desadv_from_auchan_real():
+def fetch_desadv_from_auchan():
     """
-    Connexion RÉELLE au site Auchan ATGPED avec debugging
+    Connexion RÉELLE au site Auchan ATGPEDI
+    Utilise les secrets: AUCHAN_USERNAME / AUCHAN_PASSWORD
     """
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
+    
     try:
-        import requests
-        from bs4 import BeautifulSoup
-        
-        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
         session = requests.Session()
         
-        # Récupérer les credentials
+        # Récupération des identifiants Auchan
         try:
-            username = st.secrets.get("EDI_USERNAME", "")
-            password = st.secrets.get("EDI_PASSWORD", "")
+            username = st.secrets.get("AUCHAN_USERNAME", "")
+            password = st.secrets.get("AUCHAN_PASSWORD", "")
         except:
-            username = os.getenv("EDI_USERNAME", "")
-            password = os.getenv("EDI_PASSWORD", "")
+            username = os.getenv("AUCHAN_USERNAME", "")
+            password = os.getenv("AUCHAN_PASSWORD", "")
         
         if not username or not password:
-            return [], tomorrow, "❌ Identifiants non configurés"
+            return [], tomorrow, "❌ Identifiants 'AUCHAN_...' manquants dans Secrets"
         
-        # ÉTAPE 1: Page de connexion
-        login_url = "https://auchan.atgped.net/gui.php"
+        # URL Auchan (Mise à jour)
+        base_url = "https://auchan.atgpedi.net/index.php"
         
+        # 1. Initialisation (GET)
         try:
-            initial_response = session.get(login_url, timeout=10)
-            st.info(f"🔍 Status initial: {initial_response.status_code}")
+            session.get(base_url, timeout=10)
         except Exception as e:
-            return [], tomorrow, f"❌ Impossible d'accéder au site: {str(e)}"
+            return [], tomorrow, f"❌ Site inaccessible: {str(e)}"
         
-        # Tentative de connexion
+        # 2. Connexion (POST)
         login_data = {
             "username": username,
             "password": password,
             "submit": "Connexion"
         }
+        session.post(base_url, data=login_data, timeout=15)
         
-        try:
-            login_response = session.post(login_url, data=login_data, timeout=15)
-            
-            # Vérifier si on est connecté
-            if "Liste des commandes" in login_response.text:
-                st.success("✅ Connexion réussie")
-            elif "Documents" in login_response.text:
-                st.success("✅ Connexion réussie")
-            elif "Deconnexion" in login_response.text or "Déconnexion" in login_response.text:
-                st.success("✅ Connexion réussie")
-            else:
-                if "erreur" in login_response.text.lower() or "incorrect" in login_response.text.lower():
-                    return [], tomorrow, "❌ Identifiants incorrects"
-                
-        except Exception as e:
-            return [], tomorrow, f"❌ Erreur lors de la connexion: {str(e)}"
-        
-        # ÉTAPE 2: Accéder à la liste des commandes
-        commandes_url = "https://auchan.atgped.net/gui.php"
+        # 3. Liste des commandes
         params = {
             "query": "documents_commandes_liste",
             "page": "documents_commandes_liste",
         }
+        response = session.get(base_url, params=params, timeout=15)
         
-        try:
-            response = session.get(commandes_url, params=params, timeout=15)
-        except Exception as e:
-            return [], tomorrow, f"❌ Erreur accès liste: {str(e)}"
-        
+        # Vérification simple
+        if "Connexion" in response.text or "Mot de passe" in response.text:
+             return [], tomorrow, "❌ Échec connexion (Login/Mdp incorrects ?)"
+
         soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # ÉTAPE 3: Trouver le tableau
         table = soup.find('table', {'class': 'datalist'})
-        if not table:
-            table = soup.find('table')
+        if not table: table = soup.find('table')
         
         if not table:
-            return [], tomorrow, "❌ Tableau introuvable"
+            if "Aucun document" in response.text:
+                return [], tomorrow, "success" # Connecté mais vide
+            return [], tomorrow, "⚠️ Connecté mais tableau introuvable"
         
-        # ÉTAPE 4: Parser le tableau
         commandes_brutes = []
         rows = table.find_all('tr')
         
-        for idx, row in enumerate(rows[1:], 1):  # Skip header
+        for row in rows[1:]:
             cols = row.find_all('td')
-            if len(cols) < 4:
-                continue
+            if len(cols) < 4: continue
             
             try:
-                # Extraire les données
                 numero = cols[0].text.strip()
                 
-                # Trouver la colonne de la date
                 date_livraison = None
                 for col in cols:
-                    text = col.text.strip()
-                    if re.match(r'\d{2}/\d{2}/\d{4}', text):
-                        date_livraison = text
+                    txt = col.text.strip()
+                    if re.match(r'\d{2}/\d{2}/\d{4}', txt):
+                        date_livraison = txt
                         break
                 
-                # Trouver le montant
-                montant = None
+                montant = 0.0
                 for col in cols:
-                    text = col.text.strip().replace(" ", "").replace(",", ".")
-                    if re.match(r'^\d+\.\d{2}$', text):
-                        try:
-                            montant = float(text)
-                            break
-                        except:
-                            pass
+                    txt = col.text.strip().replace(" ", "").replace(",", ".")
+                    if re.match(r'^\d+\.\d{2}$', txt):
+                        try: montant = float(txt); break
+                        except: pass
                 
                 entrepot = cols[2].text.strip() if len(cols) > 2 else ""
                 
-                if date_livraison == tomorrow and montant:
+                if date_livraison == tomorrow and montant > 0:
                     commandes_brutes.append({
                         "numero": numero,
                         "entrepot": entrepot,
                         "montant": montant,
                         "date_livraison": date_livraison
                     })
-                    
-            except Exception as e:
-                st.warning(f"⚠️ Erreur ligne {idx}: {str(e)}")
-                continue
+            except: continue
         
-        # Regrouper par entrepôt
         entrepots = {}
         for cmd in commandes_brutes:
-            entrepot = cmd["entrepot"]
-            if entrepot not in entrepots:
-                entrepots[entrepot] = {"montant_total": 0, "commandes": []}
-            entrepots[entrepot]["montant_total"] += cmd["montant"]
-            entrepots[entrepot]["commandes"].append(cmd["numero"])
-        
-        # Filtrer >= 850€
+            e = cmd["entrepot"]
+            if e not in entrepots: entrepots[e] = {"montant_total": 0, "commandes": []}
+            entrepots[e]["montant_total"] += cmd["montant"]
+            entrepots[e]["commandes"].append(cmd["numero"])
+            
         desadv_a_faire = []
-        for entrepot, data in entrepots.items():
+        for e, data in entrepots.items():
             if data["montant_total"] >= 850:
                 desadv_a_faire.append({
-                    "entrepot": entrepot,
+                    "entrepot": e,
                     "montant_total": data["montant_total"],
                     "nb_commandes": len(data["commandes"]),
                     "commandes": data["commandes"]
                 })
-        
+                
         desadv_a_faire.sort(key=lambda x: x["montant_total"], reverse=True)
         return desadv_a_faire, tomorrow, "success"
-        
-    except Exception as e:
-        return [], tomorrow, f"❌ Erreur: {str(e)}"
 
-def fetch_desadv_from_edi1_real():
+    except Exception as e:
+        return [], tomorrow, f"❌ Erreur technique Auchan: {str(e)}"
+
+def fetch_desadv_from_edi1():
     """
-    Connexion au site EDI1 (ed1.atgped.net)
+    Connexion RÉELLE au site EDI1 ATGPEDI
+    Utilise les secrets: EDI1_USERNAME / EDI1_PASSWORD
     """
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
+    
     try:
-        import requests
-        from bs4 import BeautifulSoup
-        
-        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
         session = requests.Session()
-        login_url = "https://ed1.atgped.net/gui.php"
         
+        # Récupération des identifiants EDI1
         try:
-            username = st.secrets.get("EDI_USERNAME", "")
-            password = st.secrets.get("EDI_PASSWORD", "")
+            username = st.secrets.get("EDI1_USERNAME", "")
+            password = st.secrets.get("EDI1_PASSWORD", "")
         except:
-            username = os.getenv("EDI_USERNAME", "")
-            password = os.getenv("EDI_PASSWORD", "")
-        
+            username = os.getenv("EDI1_USERNAME", "")
+            password = os.getenv("EDI1_PASSWORD", "")
+            
         if not username or not password:
-            return [], tomorrow, "Identifiants non configurés"
+            return [], tomorrow, "❌ Identifiants 'EDI1_...' manquants dans Secrets"
+            
+        # URL EDI1 (Mise à jour)
+        base_url = "https://edi1.atgpedi.net/index.php"
         
         login_data = {
             "username": username,
@@ -467,12 +438,10 @@ def fetch_desadv_from_edi1_real():
             "action": "login"
         }
         
-        login_response = session.post(login_url, data=login_data, timeout=15)
+        # Tentative de connexion
+        session.post(base_url, data=login_data, timeout=15)
         
-        if "Liste des commandes" not in login_response.text and "Documents" not in login_response.text:
-            return [], tomorrow, "Échec de connexion"
-        
-        commandes_url = "https://ed1.atgped.net/gui.php"
+        # Accès page commandes
         params = {
             "query": "documents_commandes_liste",
             "page": "documents_commandes_liste",
@@ -484,7 +453,11 @@ def fetch_desadv_from_edi1_real():
             "livrerA": "",
         }
         
-        response = session.get(commandes_url, params=params, timeout=15)
+        response = session.get(base_url, params=params, timeout=15)
+        
+        if "Connexion" in response.text and "Mot de passe" in response.text:
+             return [], tomorrow, "❌ Échec connexion (Login/Mdp incorrects ?)"
+
         soup = BeautifulSoup(response.content, 'html.parser')
         
         clients_autorises = [
@@ -496,14 +469,14 @@ def fetch_desadv_from_edi1_real():
         commandes_brutes = []
         table = soup.find('table')
         if not table:
-            return [], tomorrow, "Aucune commande trouvée"
-        
+            if "Aucun document" in response.text:
+                return [], tomorrow, "success"
+            return [], tomorrow, "⚠️ Tableau introuvable sur EDI1"
+            
         rows = table.find_all('tr')[1:]
-        
         for row in rows:
             cols = row.find_all('td')
-            if len(cols) < 7:
-                continue
+            if len(cols) < 7: continue
             
             try:
                 numero = cols[0].text.strip()
@@ -513,7 +486,7 @@ def fetch_desadv_from_edi1_real():
                 montant_text = cols[6].text.strip()
                 montant = float(montant_text.replace(" ", "").replace(",", "."))
                 
-                if any(client_autorise in client.upper() for client_autorise in clients_autorises):
+                if any(c in client.upper() for c in clients_autorises):
                     if date_livraison == tomorrow:
                         commandes_brutes.append({
                             "numero": numero,
@@ -522,22 +495,20 @@ def fetch_desadv_from_edi1_real():
                             "montant": montant,
                             "date_livraison": date_livraison
                         })
-            except:
-                continue
-        
+            except: continue
+            
         clients = {}
         for cmd in commandes_brutes:
-            client = cmd["client"]
-            if client not in clients:
-                clients[client] = {"montant_total": 0, "commandes": []}
-            clients[client]["montant_total"] += cmd["montant"]
-            clients[client]["commandes"].append(cmd["numero"])
-        
+            c = cmd["client"]
+            if c not in clients: clients[c] = {"montant_total": 0, "commandes": []}
+            clients[c]["montant_total"] += cmd["montant"]
+            clients[c]["commandes"].append(cmd["numero"])
+            
         desadv_a_faire = []
-        for client, data in clients.items():
+        for c, data in clients.items():
             if data["montant_total"] >= 850:
                 desadv_a_faire.append({
-                    "entrepot": client,
+                    "entrepot": c,
                     "montant_total": data["montant_total"],
                     "nb_commandes": len(data["commandes"]),
                     "commandes": data["commandes"]
@@ -547,76 +518,7 @@ def fetch_desadv_from_edi1_real():
         return desadv_a_faire, tomorrow, "success"
         
     except Exception as e:
-        return [], tomorrow, f"Erreur: {str(e)}"
-
-def fetch_desadv_from_auchan():
-    """Version avec fallback pour Auchan"""
-    result, date, status = fetch_desadv_from_auchan_real()
-    
-    if status != "success":
-        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
-        commandes_brutes = [
-            {"numero": "03385063", "entrepot": "PFI VENDENHEIM", "montant": 5432.70, "date_livraison": tomorrow},
-            {"numero": "03311038", "entrepot": "APPRO PFI LE COUDRAY", "montant": 3406.81, "date_livraison": tomorrow},
-            {"numero": "03401873", "entrepot": "PFI CARVIN", "montant": 3226.07, "date_livraison": tomorrow},
-        ]
-        
-        entrepots = {}
-        for cmd in commandes_brutes:
-            entrepot = cmd["entrepot"]
-            if entrepot not in entrepots:
-                entrepots[entrepot] = {"montant_total": 0, "commandes": []}
-            entrepots[entrepot]["montant_total"] += cmd["montant"]
-            entrepots[entrepot]["commandes"].append(cmd["numero"])
-        
-        desadv_a_faire = []
-        for entrepot, data in entrepots.items():
-            if data["montant_total"] >= 850:
-                desadv_a_faire.append({
-                    "entrepot": entrepot,
-                    "montant_total": data["montant_total"],
-                    "nb_commandes": len(data["commandes"]),
-                    "commandes": data["commandes"]
-                })
-        
-        desadv_a_faire.sort(key=lambda x: x["montant_total"], reverse=True)
-        return desadv_a_faire, tomorrow, "simulation"
-    
-    return result, date, status
-
-def fetch_desadv_from_edi1():
-    """Version avec fallback pour EDI1"""
-    result, date, status = fetch_desadv_from_edi1_real()
-    
-    if status != "success":
-        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
-        commandes_brutes = [
-            {"numero": "46961161", "client": "INTERMARCHE", "montant": 4085.29, "date_livraison": tomorrow},
-            {"numero": "46962231", "client": "ITM LUXEMONT-ET-VILLOTTE", "montant": 1293.78, "date_livraison": tomorrow},
-        ]
-        
-        clients = {}
-        for cmd in commandes_brutes:
-            client = cmd["client"]
-            if client not in clients:
-                clients[client] = {"montant_total": 0, "commandes": []}
-            clients[client]["montant_total"] += cmd["montant"]
-            clients[client]["commandes"].append(cmd["numero"])
-        
-        desadv_a_faire = []
-        for client, data in clients.items():
-            if data["montant_total"] >= 850:
-                desadv_a_faire.append({
-                    "entrepot": client,
-                    "montant_total": data["montant_total"],
-                    "nb_commandes": len(data["commandes"]),
-                    "commandes": data["commandes"]
-                })
-        
-        desadv_a_faire.sort(key=lambda x: x["montant_total"], reverse=True)
-        return desadv_a_faire, tomorrow, "simulation"
-    
-    return result, date, status
+        return [], tomorrow, f"❌ Erreur technique EDI1: {str(e)}"
 
 # ============================================
 # SIDEBAR
@@ -684,6 +586,7 @@ with st.sidebar:
         
         if st.button("🔍 Vérifier les DESADV", use_container_width=True, type="secondary"):
             with st.spinner("🔄 Connexion aux plateformes EDI..."):
+                # APPEL DIRECT - PAS DE SIMULATION
                 auchan_data, auchan_date, auchan_status = fetch_desadv_from_auchan()
                 edi1_data, edi1_date, edi1_status = fetch_desadv_from_edi1()
                 
@@ -731,7 +634,15 @@ with st.sidebar:
                     st.session_state.show_desadv_details = False
                     st.rerun()
             else:
-                st.info("Aucun DESADV à traiter")
+                # Si on a des statuts d'erreur, on les affiche ici
+                if hasattr(st.session_state, 'desadv_auchan') and st.session_state.desadv_auchan['status'] != 'success':
+                    st.error(f"Auchan: {st.session_state.desadv_auchan['status']}")
+                if hasattr(st.session_state, 'desadv_edi1') and st.session_state.desadv_edi1['status'] != 'success':
+                    st.error(f"EDI1: {st.session_state.desadv_edi1['status']}")
+                
+                if (hasattr(st.session_state, 'desadv_auchan') and st.session_state.desadv_auchan['status'] == 'success' and
+                    hasattr(st.session_state, 'desadv_edi1') and st.session_state.desadv_edi1['status'] == 'success'):
+                    st.info("Aucun DESADV à traiter")
     else:
         st.markdown("---")
         st.info("🔒 Vérification DESADV\nAccès non autorisé pour votre compte")
@@ -749,13 +660,11 @@ if st.session_state.show_desadv_details:
     
     # AUCHAN
     with col1:
-        st.markdown("### 🔵 AUCHAN ATGPED")
+        st.markdown("### 🔵 AUCHAN")
         if hasattr(st.session_state, 'desadv_auchan'):
             auchan = st.session_state.desadv_auchan
             
-            if auchan["status"] == "simulation":
-                st.warning("⚠️ Données de simulation (connexion impossible)")
-            elif auchan["status"] != "success":
+            if auchan["status"] != "success":
                 st.error(f"❌ {auchan['status']}")
             
             if auchan["data"]:
@@ -776,13 +685,11 @@ if st.session_state.show_desadv_details:
     
     # EDI1
     with col2:
-        st.markdown("### 🟢 EDI1 (ITM, CSD, etc.)")
+        st.markdown("### 🟢 EDI1 (ITM, CSD)")
         if hasattr(st.session_state, 'desadv_edi1'):
             edi1 = st.session_state.desadv_edi1
             
-            if edi1["status"] == "simulation":
-                st.warning("⚠️ Données de simulation (connexion impossible)")
-            elif edi1["status"] != "success":
+            if edi1["status"] != "success":
                 st.error(f"❌ {edi1['status']}")
             
             if edi1["data"]:
@@ -1236,12 +1143,6 @@ if st.session_state.show_help == "guide":
             "web_access": True  # ou False
         }
         ```
-        
-        **Paramètres :**
-        - `role: "admin"` → Accès complet
-        - `role: "user"` → Accès limité
-        - `web_access: True` → Peut vérifier les DESADV
-        - `web_access: False` → Pas d'accès aux plateformes EDI
         """)
     
     if st.button("✅ Compris, retour à l'outil", type="primary"):
