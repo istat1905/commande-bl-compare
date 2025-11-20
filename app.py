@@ -296,17 +296,19 @@ def calculate_service_rate(qte_cmd, qte_bl):
 def fetch_desadv_from_auchan():
     """
     Connexion RÉELLE au site Auchan ATGPEDI
-    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Application du filtre de date (POST ciblé).
+    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Application du filtre de date (POST sans bouton submit).
     """
+    from datetime import datetime, timedelta
+    import requests
+    from bs4 import BeautifulSoup
+    import os
+    from urllib.parse import urljoin 
+    import re
+    import streamlit as st 
+
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
     
     try:
-        import requests
-        from bs4 import BeautifulSoup
-        import os
-        from urllib.parse import urljoin 
-        import re
-
         session = requests.Session()
         
         try:
@@ -341,53 +343,51 @@ def fetch_desadv_from_auchan():
         else:
              params = {"query": "documents_commandes_liste", "page": "documents_commandes_liste"}
              response = session.get(base_url, params=params, timeout=15)
-             post_url = response.url # URL après le GET
+             post_url = response.url
 
-        # 3. Application du filtre de date (POST/GET CIBLÉ)
+        # 3. Application du filtre de date (POST/GET CIBLÉ sans signal de soumission)
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # A. Tenter de trouver le formulaire qui contient le champ de date
         date_input = soup.find('input', {'name': 'doDateHeureDemandee'})
         filter_form = None
         if date_input:
             filter_form = date_input.find_parent('form')
+        
+        if not filter_form:
+            filter_form = soup.find('form')
 
         if filter_form:
-            # URL de soumission et méthode
             form_action = filter_form.get('action', post_url)
             form_method = filter_form.get('method', 'post').upper()
             submit_url = urljoin(post_url, form_action)
 
             form_data = {}
-            # B. Collecter TOUS les champs du formulaire spécifique
             for input_tag in filter_form.find_all(['input', 'select', 'textarea']):
                 name = input_tag.get('name')
-                # La valeur doit être récupérée si c'est un champ caché/par défaut,
-                # sinon elle sera surchargée par notre date
-                value = input_tag.get('value', '') 
-                if name:
+                value = input_tag.get('value', '')
+                if name and input_tag.get('type') != 'submit': # IMPORTANT: ne pas inclure les boutons submit
                     form_data[name] = value
 
-            # C. Surcharge du champ de date avec la date de demain
+            # Surcharge du champ de date avec la date de demain
             form_data['doDateHeureDemandee'] = tomorrow
             
-            # D. Soumettre le formulaire filtré avec la bonne méthode
+            # Pas d'ajout de paramètre submit=... pour simuler la touche "Entrée"
+            
+            # Soumettre le formulaire filtré
             if form_method == 'POST':
                 response = session.post(submit_url, data=form_data, timeout=15)
-            else: # GET
+            else: 
                 response = session.get(submit_url, params=form_data, timeout=15)
         else:
-            # Si le formulaire n'est pas trouvé (nouvelle structure), on retourne l'erreur DEBUG
-            html_snippet = response.text[:2000].replace('\n', ' ').replace('\r', '').strip()
-            return [], tomorrow, f"❌ DEBUG HTML AUCHAN (Formulaire de date introuvable): {html_snippet}"
-
+            return [], tomorrow, "❌ Échec: Formulaire de filtre de date introuvable."
+        
         # 4. Traitement de la page après filtrage
         soup = BeautifulSoup(response.content, 'html.parser')
         
         if "Aucun document" in response.text:
             return [], tomorrow, "success"
             
-        # --- RECHERCHE ULTIME DU TABLEAU ---
+        # --- RECHERCHE ULTIME DU TABLEAU (Logique de recherche agressive) ---
         table = None
         column_indicators = ["commande", "livraison", "montant"] 
         all_tables = soup.find_all('table')
@@ -414,14 +414,13 @@ def fetch_desadv_from_auchan():
         # --- FIN RECHERCHE ---
         
         if not table:
-            # Échec final, on retourne le DEBUG HTML de la page des commandes (post-filtre)
+            # Échec final avec DEBUG HTML
             html_snippet = response.text[:2000].replace('\n', ' ').replace('\r', '').strip()
             return [], tomorrow, f"❌ DEBUG HTML AUCHAN (Tableau introuvable après filtre): {html_snippet}"
         
         # Le reste du parsing (inchangé)
         commandes_brutes = []
         rows = table.find_all('tr')
-        # ... [Reste du code de parsing et de regroupement des commandes] ...
         
         for row in rows[1:]:
             cols = row.find_all('td')
