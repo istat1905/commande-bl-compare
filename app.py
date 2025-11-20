@@ -294,7 +294,8 @@ def calculate_service_rate(qte_cmd, qte_bl):
 
 def fetch_desadv_from_auchan():
     """
-    DEBUG: Tente la connexion et la navigation à Auchan. Si le tableau est introuvable, retourne l'HTML brut de la page des commandes.
+    Connexion RÉELLE au site Auchan ATGPEDI
+    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Recherche ultra-robuste du tableau.
     """
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
     
@@ -303,7 +304,8 @@ def fetch_desadv_from_auchan():
         from bs4 import BeautifulSoup
         import os
         from urllib.parse import urljoin 
-        
+        import re
+
         session = requests.Session()
         
         try:
@@ -318,11 +320,9 @@ def fetch_desadv_from_auchan():
         
         base_url = "https://auchan.atgpedi.net/index.php"
         
-        # 1. Initialisation & Connexion
+        # 1. Connexion (POST)
         session.get(base_url, timeout=10)
         login_data = {"username": username, "password": password, "submit": "Connexion"}
-        
-        # La réponse 'response' contient la page d'accueil ("Bonjour")
         response = session.post(base_url, data=login_data, timeout=15)
         
         if "Connexion" in response.text or "Mot de passe" in response.text:
@@ -330,16 +330,14 @@ def fetch_desadv_from_auchan():
 
         soup = BeautifulSoup(response.content, 'html.parser')
 
-        # 2. Recherche du lien "Commandes" pour simuler le clic
-        # Recherche robuste du lien, même s'il est légèrement différent
-        commande_link = soup.find('a', href=re.compile(r'documents?_commandes?_liste'))
+        # 2. Navigation : Recherche du lien "Commandes" (gui.php)
+        commande_link = soup.find('a', href=re.compile(r'gui\.php.*documents?_commandes?_liste'))
         
         if commande_link and 'href' in commande_link.attrs:
             new_url = urljoin(base_url, commande_link['href'])
-            # Simuler le clic (GET vers la liste des commandes)
             response = session.get(new_url, timeout=15)
         else:
-             # Tentative directe si le lien n'est pas trouvé
+             # Fallback vers l'ancienne URL directe si le lien n'est pas trouvé
              params = {"query": "documents_commandes_liste", "page": "documents_commandes_liste"}
              response = session.get(base_url, params=params, timeout=15)
 
@@ -349,36 +347,53 @@ def fetch_desadv_from_auchan():
         if "Aucun document" in response.text:
             return [], tomorrow, "success"
             
-        # --- RECHERCHE ET LOGIQUE DE DEBUG ---
-        column_indicators = ["commande", "livraison", "montant"] 
-        all_tables = soup.find_all('table')
+        # --- RECHERCHE ULTIME DU TABLEAU (Améliorée) ---
         table = None
         
+        # Tentative 1: Recherche par ID, Classe ou contenu d'en-tête (méthodes robustes)
+        column_indicators = ["commande", "livraison", "montant"] 
+        all_tables = soup.find_all('table')
+        
         for t in all_tables:
+            # Recherche par classe ou ID
+            if 'datalist' in t.get('class', []):
+                table = t; break
+            if re.search(r'data_?list|data_?table|display|dataTable|list|grid', t.get('class', [''])[0], re.IGNORECASE):
+                table = t; break
+            
+            # Recherche par contenu d'en-tête
             header_row = t.find(['thead', 'tr']) 
             if header_row:
                 header_text = header_row.text.lower()
                 matches = sum(1 for indicator in column_indicators if indicator in header_text)
                 if matches >= 2:
-                    table = t
-                    break
+                    table = t; break
+        
+        # Tentative 2: Chercher le conteneur du tableau (très agressif)
+        if not table:
+            # Chercher un élément qui contient le texte "N° commande" (élément typique d'en-tête)
+            header_text_element = soup.find(string=re.compile(r'N\s?°\s?commande', re.IGNORECASE))
+            if header_text_element:
+                # Remonter au parent le plus proche et chercher la première table DANS ce conteneur
+                parent = header_text_element.find_parent()
+                if parent:
+                    table = parent.find('table')
+        # --- FIN RECHERCHE ---
         
         if not table:
-            # RETOURNE LE DEBUT DU CODE SOURCE LORS DE L'ERREUR
-            html_snippet = response.text[:2000].replace('\n', ' ').replace('\r', '').strip()
-            return [], tomorrow, f"❌ DEBUG HTML AUCHAN: {html_snippet}"
-        # --- FIN LOGIQUE DE DEBUG ---
+            return [], tomorrow, "⚠️ Tableau introuvable (Structure HTML inconnue après navigation)"
         
-        # ... Reste du parsing (inchangé) ...
         commandes_brutes = []
         rows = table.find_all('tr')
         
+        # Parsing du tableau 
         for row in rows[1:]:
             cols = row.find_all('td')
             if len(cols) < 4: continue
             
             try:
                 numero = cols[0].text.strip()
+                
                 date_livraison = None
                 for col in cols:
                     txt = col.text.strip()
@@ -430,7 +445,7 @@ def fetch_desadv_from_auchan():
 def fetch_desadv_from_edi1():
     """
     Connexion RÉELLE au site EDI1 ATGPEDI
-    Utilise les secrets: EDI1_USERNAME / EDI1_PASSWORD
+    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Recherche ultra-robuste du tableau.
     """
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
     
@@ -438,7 +453,8 @@ def fetch_desadv_from_edi1():
         import requests
         from bs4 import BeautifulSoup
         import os
-        from urllib.parse import urljoin # Nouvelle importation
+        from urllib.parse import urljoin
+        import re
         
         session = requests.Session()
         
@@ -454,7 +470,7 @@ def fetch_desadv_from_edi1():
             
         base_url = "https://edi1.atgpedi.net/index.php"
         
-        # 1. Connexion
+        # 1. Connexion (POST)
         login_data = {"username": username, "password": password, "action": "login"}
         response = session.post(base_url, data=login_data, timeout=15)
         
@@ -463,47 +479,59 @@ def fetch_desadv_from_edi1():
 
         soup = BeautifulSoup(response.content, 'html.parser')
 
-        # 2. Recherche du lien "Commandes" pour simuler le clic
-        commande_link = soup.find('a', href=re.compile(r'documents_commandes_liste'))
+        # 2. Navigation : Recherche du lien "Commandes" (gui.php)
+        commande_link = soup.find('a', href=re.compile(r'gui\.php.*documents?_commandes?_liste'))
         
         if commande_link and 'href' in commande_link.attrs:
-            # Construction de l'URL cible
             new_url = urljoin(base_url, commande_link['href'])
-            # Simuler le clic (GET vers la liste des commandes)
             response = session.get(new_url, timeout=15)
         else:
-            # Si le lien n'est pas trouvé, on essaie l'ancienne URL directe (au cas où)
+            # Fallback vers l'ancienne URL directe si le lien n'est pas trouvé
             params = {"query": "documents_commandes_liste", "page": "documents_commandes_liste", "lines_per_page": "1000"}
             response = session.get(base_url, params=params, timeout=15)
         
         # 3. Traitement de la page de la liste des commandes
         soup = BeautifulSoup(response.content, 'html.parser')
-        
+
         if "Aucun document" in response.text:
             return [], tomorrow, "success"
 
-        # --- RECHERCHE ULTRA-ROBUSTE DU TABLEAU ---
-        column_indicators = ["commande", "livraison", "montant"]
-        all_tables = soup.find_all('table')
+        # --- RECHERCHE ULTIME DU TABLEAU (Améliorée) ---
         table = None
         
+        # Tentative 1: Recherche par ID, Classe ou contenu d'en-tête (méthodes robustes)
+        column_indicators = ["commande", "livraison", "montant"] 
+        all_tables = soup.find_all('table')
+        
         for t in all_tables:
+            # Recherche par classe ou ID
+            if 'datalist' in t.get('class', []):
+                table = t; break
+            if re.search(r'data_?list|data_?table|display|dataTable|list|grid', t.get('class', [''])[0], re.IGNORECASE):
+                table = t; break
+            
+            # Recherche par contenu d'en-tête
             header_row = t.find(['thead', 'tr']) 
             if header_row:
                 header_text = header_row.text.lower()
                 matches = sum(1 for indicator in column_indicators if indicator in header_text)
                 if matches >= 2:
-                    table = t
-                    break
+                    table = t; break
+        
+        # Tentative 2: Chercher le conteneur du tableau (très agressif)
+        if not table:
+            header_text_element = soup.find(string=re.compile(r'N\s?°\s?commande', re.IGNORECASE))
+            if header_text_element:
+                parent = header_text_element.find_parent()
+                if parent:
+                    table = parent.find('table')
+        # --- FIN RECHERCHE ---
         
         if not table:
-            return [], tomorrow, "⚠️ Tableau introuvable sur EDI1 (Navigation ou structure HTML)"
-        # --- FIN RECHERCHE ---
+            return [], tomorrow, "⚠️ Tableau introuvable sur EDI1 (Structure HTML inconnue après navigation)"
 
         clients_autorises = [
-            "INTERMARCHE",
-            "DEPOT CSD ALBY SUR CHERAN",
-            "ITM LUXEMONT-ET-VILLOTTE"
+            "ETABLISSEMENT DOLE", "ENTREPOT CSD produits frais", "ITM LUXEMONT-ET-VILLOTTE"
         ]
         
         commandes_brutes = []
