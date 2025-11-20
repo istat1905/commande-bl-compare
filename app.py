@@ -295,7 +295,7 @@ def calculate_service_rate(qte_cmd, qte_bl):
 def fetch_desadv_from_auchan():
     """
     Connexion RÉELLE au site Auchan ATGPEDI
-    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Application du filtre de date (POST Final vers index.php).
+    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Application du filtre de date (GET Final avec tous les paramètres).
     """
     from datetime import datetime, timedelta
     import requests
@@ -320,7 +320,7 @@ def fetch_desadv_from_auchan():
         if not username or not password:
             return [], tomorrow, "❌ Identifiants 'AUCHAN_...' manquants dans Secrets"
         
-        base_url = "https://auchan.atgpedi.net/index.php" # URL de base
+        base_url = "https://auchan.atgpedi.net/index.php"
         
         # 1. Connexion (POST)
         session.get(base_url, timeout=10)
@@ -341,11 +341,11 @@ def fetch_desadv_from_auchan():
         else:
              params = {"query": "documents_commandes_liste", "page": "documents_commandes_liste"}
              response = session.get(base_url, params=params, timeout=15)
-             post_url = response.url 
+             post_url = response.url # L'URL après navigation
 
-        # 3. Application du filtre de date (POST Final vers index.php)
+        # 3. Application du filtre de date (GET Final avec tous les paramètres)
         soup = BeautifulSoup(response.content, 'html.parser')
-        submit_url = base_url # Ciblage de l'URL de base pour le traitement POST
+        submit_url = post_url # Ciblage de l'URL de la liste (gui.php?page=...)
         form_data = {}
         
         # --- Collecter TOUS les champs cachés de la page (token inclus) ---
@@ -363,8 +363,8 @@ def fetch_desadv_from_auchan():
         # Surcharge du champ de date (le filtre souhaité)
         form_data['doDateHeureDemandee'] = tomorrow
         
-        # Soumission POST forcée vers index.php
-        response = session.post(submit_url, data=form_data, timeout=15)
+        # Soumission GET finale
+        response = session.get(submit_url, params=form_data, timeout=15)
         
         # 4. Traitement de la page après filtrage
         soup = BeautifulSoup(response.content, 'html.parser')
@@ -393,7 +393,7 @@ def fetch_desadv_from_auchan():
         if not table:
             # Échec final avec DEBUG HTML
             html_snippet = response.text[:2000].replace('\n', ' ').replace('\r', '').strip()
-            return [], tomorrow, f"❌ DEBUG HTML AUCHAN (Échec final POST index.php): {html_snippet}"
+            return [], tomorrow, f"❌ DEBUG HTML AUCHAN (Échec final GET sur gui.php): {html_snippet}"
         
         # Le reste du parsing (inchangé)
         commandes_brutes = []
