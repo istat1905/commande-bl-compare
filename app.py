@@ -295,7 +295,7 @@ def calculate_service_rate(qte_cmd, qte_bl):
 def fetch_desadv_from_auchan():
     """
     Connexion RÉELLE au site Auchan ATGPEDI
-    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Recherche ultra-robuste du tableau.
+    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Application du filtre de date.
     """
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
     
@@ -333,24 +333,42 @@ def fetch_desadv_from_auchan():
         # 2. Navigation : Recherche du lien "Commandes" (gui.php)
         commande_link = soup.find('a', href=re.compile(r'gui\.php.*documents?_commandes?_liste'))
         
+        # On utilise l'URL de la page des commandes (soit le lien trouvé, soit le fallback)
+        post_url = None
         if commande_link and 'href' in commande_link.attrs:
-            new_url = urljoin(base_url, commande_link['href'])
-            response = session.get(new_url, timeout=15)
+            post_url = urljoin(base_url, commande_link['href'])
+            response = session.get(post_url, timeout=15)
         else:
-             # Fallback vers l'ancienne URL directe si le lien n'est pas trouvé
              params = {"query": "documents_commandes_liste", "page": "documents_commandes_liste"}
              response = session.get(base_url, params=params, timeout=15)
+             post_url = response.url # URL après le GET
 
-        # 3. Traitement de la page de la liste des commandes
+        # 3. Application du filtre de date (POST)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        form_data = {}
+        # Collecter tous les champs de formulaire (cachés ou visibles)
+        for input_tag in soup.find_all(['input', 'select', 'textarea']):
+            name = input_tag.get('name')
+            value = input_tag.get('value', '')
+            if name:
+                form_data[name] = value
+
+        # Surcharge du champ de date avec la date de demain
+        form_data['doDateHeureDemandee'] = tomorrow
+        
+        # Soumettre le formulaire filtré
+        response = session.post(post_url, data=form_data, timeout=15)
+        
+        # 4. Traitement de la page après filtrage
         soup = BeautifulSoup(response.content, 'html.parser')
         
         if "Aucun document" in response.text:
             return [], tomorrow, "success"
             
-        # --- RECHERCHE ULTIME DU TABLEAU (Améliorée) ---
+        # --- RECHERCHE ULTIME DU TABLEAU ---
         table = None
         
-        # Tentative 1: Recherche par ID, Classe ou contenu d'en-tête (méthodes robustes)
         column_indicators = ["commande", "livraison", "montant"] 
         all_tables = soup.find_all('table')
         
@@ -369,24 +387,22 @@ def fetch_desadv_from_auchan():
                 if matches >= 2:
                     table = t; break
         
-        # Tentative 2: Chercher le conteneur du tableau (très agressif)
+        # Chercher le conteneur du tableau (très agressif)
         if not table:
-            # Chercher un élément qui contient le texte "N° commande" (élément typique d'en-tête)
             header_text_element = soup.find(string=re.compile(r'N\s?°\s?commande', re.IGNORECASE))
             if header_text_element:
-                # Remonter au parent le plus proche et chercher la première table DANS ce conteneur
                 parent = header_text_element.find_parent()
                 if parent:
                     table = parent.find('table')
         # --- FIN RECHERCHE ---
         
         if not table:
-            return [], tomorrow, "⚠️ Tableau introuvable (Structure HTML inconnue après navigation)"
+            return [], tomorrow, "⚠️ Échec: Tableau introuvable après application du filtre de date."
         
+        # Le reste du parsing (inchangé)
         commandes_brutes = []
         rows = table.find_all('tr')
         
-        # Parsing du tableau 
         for row in rows[1:]:
             cols = row.find_all('td')
             if len(cols) < 4: continue
@@ -410,12 +426,13 @@ def fetch_desadv_from_auchan():
                 
                 entrepot = cols[2].text.strip() if len(cols) > 2 else ""
                 
-                if date_livraison == tomorrow and montant > 0:
+                # Le filtrage par date se fait maintenant sur le site, mais on garde la vérif de sécurité
+                if montant > 0:
                     commandes_brutes.append({
                         "numero": numero,
                         "entrepot": entrepot,
                         "montant": montant,
-                        "date_livraison": date_livraison
+                        "date_livraison": date_livraison if date_livraison else tomorrow
                     })
             except: continue
         
