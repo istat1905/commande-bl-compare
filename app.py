@@ -313,70 +313,53 @@ def fetch_desadv_from_auchan():
         if not username or not password:
             return [], tomorrow, "❌ Identifiants 'AUCHAN_...' manquants dans Secrets"
         
-        # URL Auchan (Mise à jour)
         base_url = "https://auchan.atgpedi.net/index.php"
         
-        # 1. Initialisation (GET)
-        try:
-            session.get(base_url, timeout=10)
-        except Exception as e:
-            return [], tomorrow, f"❌ Site inaccessible: {str(e)}"
-        
-        # 2. Connexion (POST)
-        login_data = {
-            "username": username,
-            "password": password,
-            "submit": "Connexion"
-        }
+        # 1. Initialisation & Connexion
+        session.get(base_url, timeout=10)
+        login_data = {"username": username, "password": password, "submit": "Connexion"}
         session.post(base_url, data=login_data, timeout=15)
         
-        # 3. Liste des commandes
-        params = {
-            "query": "documents_commandes_liste",
-            "page": "documents_commandes_liste",
-        }
+        # 2. Liste des commandes
+        params = {"query": "documents_commandes_liste", "page": "documents_commandes_liste"}
         response = session.get(base_url, params=params, timeout=15)
         
-        # Vérification simple de non-connexion
         if "Connexion" in response.text or "Mot de passe" in response.text:
              return [], tomorrow, "❌ Échec connexion (Login/Mdp incorrects ?)"
 
-        # Vérification si la page est vide (pas d'erreur, juste rien à afficher)
-        if "Aucun document" in response.text:
-            return [], tomorrow, "success" # Connecté mais vide
-
-        # --- DÉBUT DE LA RECHERCHE ROBUSTE DU TABLEAU (CORRECTION) ---
         soup = BeautifulSoup(response.content, 'html.parser')
         table = None
         
-        # Tentative 1: Class standard 'datalist'
-        table = soup.find('table', {'class': 'datalist'})
-        
-        # Tentative 2: N'importe quelle table (la plus simple)
-        if not table: 
-            table = soup.find('table')
+        # Vérification si la page est vide (pas d'erreur, juste rien à afficher)
+        if "Aucun document" in response.text:
+            return [], tomorrow, "success"
             
-        # Tentative 3 (Sécurité): Chercher un en-tête de colonne pour localiser la table parente
-        if not table:
-            key_texts = ["N° commande", "Date de livraison", "Montant Total"]
-            for key_text in key_texts:
-                # Chercher un tag <td> ou <th> qui contient un des textes clés
-                cell = soup.find(['td', 'th'], string=lambda t: t and key_text in t)
-                if cell:
-                    # Remonter au parent <table>
-                    table = cell.find_parent('table')
-                    if table:
-                        break # Table trouvée
+        # --- RECHERCHE ULTRA-ROBUSTE DU TABLEAU ---
+        column_indicators = ["commande", "livraison", "montant"] 
+        all_tables = soup.find_all('table')
+        
+        for t in all_tables:
+            # Chercher une ligne d'en-tête (th) ou la première ligne de données (td)
+            header_row = t.find(['thead', 'tr']) 
+            
+            if header_row:
+                header_text = header_row.text.lower()
+                
+                # Vérifier si au moins 2 des 3 indicateurs de colonne sont présents
+                matches = sum(1 for indicator in column_indicators if indicator in header_text)
+                
+                if matches >= 2:
+                    table = t
+                    break
+        # --- FIN RECHERCHE ---
         
         if not table:
-            # Renvoyer l'erreur si aucune méthode n'a fonctionné
-            return [], tomorrow, "⚠️ Connecté mais tableau introuvable (Structure HTML changée)"
-        # --- FIN DE LA RECHERCHE ROBUSTE DU TABLEAU ---
+            return [], tomorrow, "⚠️ Connecté mais tableau introuvable (Structure HTML inconnue)"
         
         commandes_brutes = []
         rows = table.find_all('tr')
         
-        # Le reste du code de parsing reste inchangé
+        # Parsing du tableau (inchangé)
         for row in rows[1:]:
             cols = row.find_all('td')
             if len(cols) < 4: continue
