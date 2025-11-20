@@ -300,9 +300,13 @@ def fetch_desadv_from_auchan():
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
     
     try:
+        import requests
+        from bs4 import BeautifulSoup
+        import os
+        from urllib.parse import urljoin # Nouvelle importation pour gérer les liens
+        
         session = requests.Session()
         
-        # Récupération des identifiants Auchan
         try:
             username = st.secrets.get("AUCHAN_USERNAME", "")
             password = st.secrets.get("AUCHAN_PASSWORD", "")
@@ -318,48 +322,59 @@ def fetch_desadv_from_auchan():
         # 1. Initialisation & Connexion
         session.get(base_url, timeout=10)
         login_data = {"username": username, "password": password, "submit": "Connexion"}
-        session.post(base_url, data=login_data, timeout=15)
         
-        # 2. Liste des commandes
-        params = {"query": "documents_commandes_liste", "page": "documents_commandes_liste"}
-        response = session.get(base_url, params=params, timeout=15)
+        # La réponse 'response' contient maintenant la page d'accueil ("Bonjour")
+        response = session.post(base_url, data=login_data, timeout=15)
         
         if "Connexion" in response.text or "Mot de passe" in response.text:
              return [], tomorrow, "❌ Échec connexion (Login/Mdp incorrects ?)"
 
         soup = BeautifulSoup(response.content, 'html.parser')
-        table = None
+
+        # 2. Recherche du lien "Commandes" pour simuler le clic
+        # On cherche un lien dont l'attribut href contient 'documents_commandes_liste'
+        commande_link = soup.find('a', href=re.compile(r'documents_commandes_liste'))
         
-        # Vérification si la page est vide (pas d'erreur, juste rien à afficher)
+        if commande_link and 'href' in commande_link.attrs:
+            # Construction de l'URL cible (pour gérer les chemins relatifs)
+            new_url = urljoin(base_url, commande_link['href'])
+            # Simuler le clic (GET vers la liste des commandes)
+            response = session.get(new_url, timeout=15)
+        else:
+             # Si le lien n'est pas trouvé (navigation changée), on essaie l'ancienne URL directe (au cas où)
+             params = {"query": "documents_commandes_liste", "page": "documents_commandes_liste"}
+             response = session.get(base_url, params=params, timeout=15)
+
+        # 3. Traitement de la page de la liste des commandes
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
         if "Aucun document" in response.text:
             return [], tomorrow, "success"
             
         # --- RECHERCHE ULTRA-ROBUSTE DU TABLEAU ---
         column_indicators = ["commande", "livraison", "montant"] 
         all_tables = soup.find_all('table')
+        table = None
         
         for t in all_tables:
-            # Chercher une ligne d'en-tête (th) ou la première ligne de données (td)
             header_row = t.find(['thead', 'tr']) 
             
             if header_row:
                 header_text = header_row.text.lower()
-                
-                # Vérifier si au moins 2 des 3 indicateurs de colonne sont présents
                 matches = sum(1 for indicator in column_indicators if indicator in header_text)
                 
                 if matches >= 2:
                     table = t
                     break
-        # --- FIN RECHERCHE ---
         
         if not table:
-            return [], tomorrow, "⚠️ Connecté mais tableau introuvable (Structure HTML inconnue)"
+            return [], tomorrow, "⚠️ Connecté mais tableau introuvable (Navigation ou structure HTML)"
+        # --- FIN RECHERCHE ---
         
         commandes_brutes = []
         rows = table.find_all('tr')
         
-        # Parsing du tableau (inchangé)
+        # Parsing du tableau 
         for row in rows[1:]:
             cols = row.find_all('td')
             if len(cols) < 4: continue
@@ -423,9 +438,13 @@ def fetch_desadv_from_edi1():
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
     
     try:
+        import requests
+        from bs4 import BeautifulSoup
+        import os
+        from urllib.parse import urljoin # Nouvelle importation
+        
         session = requests.Session()
         
-        # Récupération des identifiants EDI1
         try:
             username = st.secrets.get("EDI1_USERNAME", "")
             password = st.secrets.get("EDI1_PASSWORD", "")
@@ -436,37 +455,54 @@ def fetch_desadv_from_edi1():
         if not username or not password:
             return [], tomorrow, "❌ Identifiants 'EDI1_...' manquants dans Secrets"
             
-        # URL EDI1 (Mise à jour)
         base_url = "https://edi1.atgpedi.net/index.php"
         
-        login_data = {
-            "username": username,
-            "password": password,
-            "action": "login"
-        }
-        
-        # Tentative de connexion
-        session.post(base_url, data=login_data, timeout=15)
-        
-        # Accès page commandes
-        params = {
-            "query": "documents_commandes_liste",
-            "page": "documents_commandes_liste",
-            "pos": "0",
-            "acces_page": "1",
-            "lines_per_page": "1000",
-            "doNumero": "",
-            "RaisonSocialeSiegeSoc": "",
-            "livrerA": "",
-        }
-        
-        response = session.get(base_url, params=params, timeout=15)
+        # 1. Connexion
+        login_data = {"username": username, "password": password, "action": "login"}
+        response = session.post(base_url, data=login_data, timeout=15)
         
         if "Connexion" in response.text and "Mot de passe" in response.text:
              return [], tomorrow, "❌ Échec connexion (Login/Mdp incorrects ?)"
 
         soup = BeautifulSoup(response.content, 'html.parser')
+
+        # 2. Recherche du lien "Commandes" pour simuler le clic
+        commande_link = soup.find('a', href=re.compile(r'documents_commandes_liste'))
         
+        if commande_link and 'href' in commande_link.attrs:
+            # Construction de l'URL cible
+            new_url = urljoin(base_url, commande_link['href'])
+            # Simuler le clic (GET vers la liste des commandes)
+            response = session.get(new_url, timeout=15)
+        else:
+            # Si le lien n'est pas trouvé, on essaie l'ancienne URL directe (au cas où)
+            params = {"query": "documents_commandes_liste", "page": "documents_commandes_liste", "lines_per_page": "1000"}
+            response = session.get(base_url, params=params, timeout=15)
+        
+        # 3. Traitement de la page de la liste des commandes
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        if "Aucun document" in response.text:
+            return [], tomorrow, "success"
+
+        # --- RECHERCHE ULTRA-ROBUSTE DU TABLEAU ---
+        column_indicators = ["commande", "livraison", "montant"]
+        all_tables = soup.find_all('table')
+        table = None
+        
+        for t in all_tables:
+            header_row = t.find(['thead', 'tr']) 
+            if header_row:
+                header_text = header_row.text.lower()
+                matches = sum(1 for indicator in column_indicators if indicator in header_text)
+                if matches >= 2:
+                    table = t
+                    break
+        
+        if not table:
+            return [], tomorrow, "⚠️ Tableau introuvable sur EDI1 (Navigation ou structure HTML)"
+        # --- FIN RECHERCHE ---
+
         clients_autorises = [
             "INTERMARCHE",
             "DEPOT CSD ALBY SUR CHERAN",
@@ -474,13 +510,9 @@ def fetch_desadv_from_edi1():
         ]
         
         commandes_brutes = []
-        table = soup.find('table')
-        if not table:
-            if "Aucun document" in response.text:
-                return [], tomorrow, "success"
-            return [], tomorrow, "⚠️ Tableau introuvable sur EDI1"
-            
         rows = table.find_all('tr')[1:]
+        
+        # Parsing du tableau
         for row in rows:
             cols = row.find_all('td')
             if len(cols) < 7: continue
