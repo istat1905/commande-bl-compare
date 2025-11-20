@@ -4,20 +4,18 @@ import pandas as pd
 import io
 import re
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
-import base64
-import os
-import requests
-from bs4 import BeautifulSoup
 
-# Gestion optionnelle de Plotly
 try:
     import plotly.express as px
     import plotly.graph_objects as go
     PLOTLY_AVAILABLE = True
 except ImportError:
     PLOTLY_AVAILABLE = False
+    st.warning("⚠️ Plotly non installé. Les graphiques ne seront pas affichés.")
+
+import base64
 
 st.set_page_config(
     page_title="DESATHOR",
@@ -25,7 +23,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS Styles
+# Logo plus haut
 st.markdown("""
 <style>
     .logo-container {
@@ -71,26 +69,37 @@ st.markdown("""
     .info-card {
         background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
     }
+    .help-button {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 15px 25px;
+        border-radius: 50px;
+        font-size: 16px;
+        font-weight: bold;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        cursor: pointer;
+        z-index: 999;
+        border: none;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Logo (Avec sécurité si l'image est absente)
-try:
-    with open("Desathor.png", "rb") as f:
-        data = f.read()
-    encoded = base64.b64encode(data).decode()
-    st.markdown(
-        f"""
-        <div class="logo-container">
-            <img src="data:image/png;base64,{encoded}" style="width:250px; max-width:80%; height:auto;">
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-except FileNotFoundError:
-    st.markdown('<div class="logo-container"><h3>DESATHOR</h3></div>', unsafe_allow_html=True)
+with open("Desathor.png", "rb") as f:
+    data = f.read()
+encoded = base64.b64encode(data).decode()
 
-# Session state initialization
+st.markdown(
+    f"""
+    <div class="logo-container">
+        <img src="data:image/png;base64,{encoded}" style="width:250px; max-width:80%; height:auto;">
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
 if 'historique' not in st.session_state:
     st.session_state.historique = []
 if "key_cmd" not in st.session_state:
@@ -103,25 +112,32 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "user_role" not in st.session_state:
     st.session_state.user_role = None
-if "show_desadv_details" not in st.session_state:
-    st.session_state.show_desadv_details = False
 
-# ============================================
-# BASE DE DONNÉES UTILISATEURS
-# ============================================
+# Base de données utilisateurs simulée (À REMPLACER par vraie BDD)
 USERS_DB = {
-    "admin": {"password": "admin123", "role": "admin", "web_access": True},
-    "user1": {"password": "user123", "role": "user", "web_access": False},
-    "logistic": {"password": "log2025", "role": "admin", "web_access": True},
+    "admin": {"password": "admin123", "role": "admin"},
+    "user1": {"password": "user123", "role": "user"},
 }
 
 def check_password(username, password):
     """Vérifie les identifiants utilisateur"""
     if username in USERS_DB and USERS_DB[username]["password"] == password:
-        return True, USERS_DB[username]["role"], USERS_DB[username]["web_access"]
-    return False, None, False
+        return True, USERS_DB[username]["role"]
+    return False, None
 
-# Page de connexion
+def save_user(username, password, role):
+    """Ajoute ou modifie un utilisateur"""
+    USERS_DB[username] = {"password": password, "role": role}
+    return True
+
+def delete_user(username):
+    """Supprime un utilisateur"""
+    if username in USERS_DB and username != "admin":
+        del USERS_DB[username]
+        return True
+    return False
+
+# Page de connexion si non authentifié
 if not st.session_state.authenticated:
     st.markdown("---")
     st.markdown("### 🔐 Connexion requise")
@@ -134,29 +150,21 @@ if not st.session_state.authenticated:
             submit = st.form_submit_button("Se connecter", use_container_width=True, type="primary")
             
             if submit:
-                is_valid, role, web_access = check_password(username, password)
+                is_valid, role = check_password(username, password)
                 if is_valid:
                     st.session_state.authenticated = True
                     st.session_state.user_role = role
-                    st.session_state.user_web_access = web_access
                     st.session_state.username = username
                     st.success(f"✅ Bienvenue {username} !")
                     st.rerun()
                 else:
                     st.error("❌ Identifiant ou mot de passe incorrect")
         
-        st.info("💡 **Demo**: admin / admin123")
+        st.info("💡 **Demo**: user1 / user123")
     st.stop()
 
 st.markdown('<h1 class="main-header">🧾 Comparateur pour DESADV</h1>', unsafe_allow_html=True)
 st.markdown(f'<p class="subtitle">Bienvenue {st.session_state.username} ({st.session_state.user_role}) | Analysez vos commandes et bons de livraison en quelques clics</p>', unsafe_allow_html=True)
-
-if not PLOTLY_AVAILABLE:
-    st.warning("⚠️ Plotly non installé. Les graphiques ne seront pas affichés.")
-
-# ============================================
-# FONCTIONS UTILITAIRES PDF
-# ============================================
 
 def find_order_numbers_in_text(text):
     if not text:
@@ -288,365 +296,18 @@ def calculate_service_rate(qte_cmd, qte_bl):
         return 0
     return min((qte_bl / qte_cmd) * 100, 100)
 
-# ============================================
-# FONCTIONS DESADV (CORRIGEES & SANS SIMULATION)
-# ============================================
-
-def fetch_desadv_from_auchan():
-    """
-    Connexion RÉELLE au site Auchan ATGPEDI
-    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Application du filtre de date (GET Final avec tous les paramètres).
-    """
-    from datetime import datetime, timedelta
-    import requests
-    from bs4 import BeautifulSoup
-    import os
-    from urllib.parse import urljoin 
-    import re
-    import streamlit as st 
-
-    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
-    
-    try:
-        session = requests.Session()
-        
-        try:
-            username = st.secrets.get("AUCHAN_USERNAME", "")
-            password = st.secrets.get("AUCHAN_PASSWORD", "")
-        except:
-            username = os.getenv("AUCHAN_USERNAME", "")
-            password = os.getenv("AUCHAN_PASSWORD", "")
-        
-        if not username or not password:
-            return [], tomorrow, "❌ Identifiants 'AUCHAN_...' manquants dans Secrets"
-        
-        base_url = "https://auchan.atgpedi.net/index.php"
-        
-        # 1. Connexion (POST)
-        session.get(base_url, timeout=10)
-        login_data = {"username": username, "password": password, "submit": "Connexion"}
-        response = session.post(base_url, data=login_data, timeout=15)
-        
-        if "Connexion" in response.text or "Mot de passe" in response.text:
-             return [], tomorrow, "❌ Échec connexion (Login/Mdp incorrects ?)"
-
-        soup = BeautifulSoup(response.content, 'html.parser')
-
-        # 2. Navigation : Clic sur le lien "Commandes" (gui.php)
-        commande_link = soup.find('a', href=re.compile(r'gui\.php.*documents?_commandes?_liste'))
-        
-        if commande_link and 'href' in commande_link.attrs:
-            post_url = urljoin(base_url, commande_link['href'])
-            response = session.get(post_url, timeout=15)
-        else:
-             params = {"query": "documents_commandes_liste", "page": "documents_commandes_liste"}
-             response = session.get(base_url, params=params, timeout=15)
-             post_url = response.url # L'URL après navigation
-
-        # 3. Application du filtre de date (GET Final avec tous les paramètres)
-        soup = BeautifulSoup(response.content, 'html.parser')
-        submit_url = post_url # Ciblage de l'URL de la liste (gui.php?page=...)
-        form_data = {}
-        
-        # --- Collecter TOUS les champs cachés de la page (token inclus) ---
-        for input_tag in soup.find_all('input', {'type': 'hidden'}):
-            name = input_tag.get('name')
-            value = input_tag.get('value', '')
-            if name:
-                form_data[name] = value
-
-        # Ajout des paramètres de filtre/contexte non-cachés
-        form_data['page'] = 'documents_commandes_liste'
-        form_data['lines_per_page'] = '1000'
-        form_data['typeDate'] = 'LIVR' # Date de Livraison
-        
-        # Surcharge du champ de date (le filtre souhaité)
-        form_data['doDateHeureDemandee'] = tomorrow
-        
-        # Soumission GET finale
-        response = session.get(submit_url, params=form_data, timeout=15)
-        
-        # 4. Traitement de la page après filtrage
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        if "Aucun document" in response.text:
-            return [], tomorrow, "success"
-            
-        # --- RECHERCHE ULTIME DU TABLEAU ---
-        table = None
-        column_indicators = ["commande", "livraison", "montant"] 
-        all_tables = soup.find_all('table')
-        
-        for t in all_tables:
-            if 'datalist' in t.get('class', []):
-                table = t; break
-            if re.search(r'data_?list|data_?table|display|dataTable|list|grid', t.get('class', [''])[0], re.IGNORECASE):
-                table = t; break
-            
-            header_row = t.find(['thead', 'tr']) 
-            if header_row:
-                header_text = header_row.text.lower()
-                matches = sum(1 for indicator in column_indicators if indicator in header_text)
-                if matches >= 2:
-                    table = t; break
-        
-        if not table:
-            # Échec final avec DEBUG HTML
-            html_snippet = response.text[:2000].replace('\n', ' ').replace('\r', '').strip()
-            return [], tomorrow, f"❌ DEBUG HTML AUCHAN (Échec final GET sur gui.php): {html_snippet}"
-        
-        # Le reste du parsing (inchangé)
-        commandes_brutes = []
-        rows = table.find_all('tr')
-        
-        # ... (Logique de parsing) ...
-        for row in rows[1:]:
-            cols = row.find_all('td')
-            if len(cols) < 4: continue
-            
-            try:
-                numero = cols[0].text.strip()
-                date_livraison = None
-                for col in cols:
-                    txt = col.text.strip()
-                    if re.match(r'\d{2}/\d{2}/\d{4}', txt):
-                        date_livraison = txt
-                        break
-                montant = 0.0
-                for col in cols:
-                    txt = col.text.strip().replace(" ", "").replace(",", ".")
-                    if re.match(r'^\d+\.\d{2}$', txt):
-                        try: montant = float(txt); break
-                        except: pass
-                
-                entrepot = cols[2].text.strip() if len(cols) > 2 else ""
-                
-                if montant > 0:
-                    commandes_brutes.append({
-                        "numero": numero,
-                        "entrepot": entrepot,
-                        "montant": montant,
-                        "date_livraison": date_livraison if date_livraison else tomorrow
-                    })
-            except: continue
-        
-        entrepots = {}
-        for cmd in commandes_brutes:
-            e = cmd["entrepot"]
-            if e not in entrepots: entrepots[e] = {"montant_total": 0, "commandes": []}
-            entrepots[e]["montant_total"] += cmd["montant"]
-            entrepots[e]["commandes"].append(cmd["numero"])
-            
-        desadv_a_faire = []
-        for e, data in entrepots.items():
-            if data["montant_total"] >= 850:
-                desadv_a_faire.append({
-                    "entrepot": e,
-                    "montant_total": data["montant_total"],
-                    "nb_commandes": len(data["commandes"]),
-                    "commandes": data["commandes"]
-                })
-                
-        desadv_a_faire.sort(key=lambda x: x["montant_total"], reverse=True)
-        return desadv_a_faire, tomorrow, "success"
-
-    except Exception as e:
-        return [], tomorrow, f"❌ Erreur technique Auchan: {str(e)}"
-        
-def fetch_desadv_from_edi1():
-    """
-    Connexion RÉELLE au site EDI1 ATGPEDI
-    DEBUG: Force l'affichage du HTML si le formulaire de filtre de date est introuvable.
-    """
-    from datetime import datetime, timedelta
-    import requests
-    from bs4 import BeautifulSoup
-    import os
-    from urllib.parse import urljoin
-    import re
-    import streamlit as st 
-    
-    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
-    
-    try:
-        session = requests.Session()
-        
-        try:
-            username = st.secrets.get("EDI1_USERNAME", "")
-            password = st.secrets.get("EDI1_PASSWORD", "")
-        except:
-            username = os.getenv("EDI1_USERNAME", "")
-            password = os.getenv("EDI1_PASSWORD", "")
-            
-        if not username or not password:
-            return [], tomorrow, "❌ Identifiants 'EDI1_...' manquants dans Secrets"
-            
-        base_url = "https://edi1.atgpedi.net/index.php"
-        
-        # 1. Connexion (POST)
-        login_data = {"username": username, "password": password, "action": "login"}
-        response = session.post(base_url, data=login_data, timeout=15)
-        
-        if "Connexion" in response.text and "Mot de passe" in response.text:
-             return [], tomorrow, "❌ Échec connexion (Login/Mdp incorrects ?)"
-
-        soup = BeautifulSoup(response.content, 'html.parser')
-
-        # 2. Navigation : Clic sur le lien "Commandes" (gui.php)
-        commande_link = soup.find('a', href=re.compile(r'gui\.php.*documents?_commandes?_liste'))
-        
-        post_url = None
-        if commande_link and 'href' in commande_link.attrs:
-            post_url = urljoin(base_url, commande_link['href'])
-            response = session.get(post_url, timeout=15)
-        else:
-            params = {"query": "documents_commandes_liste", "page": "documents_commandes_liste", "lines_per_page": "1000"}
-            response = session.get(base_url, params=params, timeout=15)
-            post_url = response.url
-
-        # 3. Application du filtre de date (POST/GET CIBLÉ sans signal de soumission)
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        date_input = soup.find('input', {'name': 'doDateHeureDemandee'})
-        filter_form = None
-        if date_input:
-            filter_form = date_input.find_parent('form')
-        
-        if not filter_form:
-            filter_form = soup.find('form')
-
-        if filter_form:
-            form_action = filter_form.get('action', post_url)
-            form_method = filter_form.get('method', 'post').upper()
-            submit_url = urljoin(post_url, form_action)
-
-            form_data = {}
-            for input_tag in filter_form.find_all(['input', 'select', 'textarea']):
-                name = input_tag.get('name')
-                value = input_tag.get('value', '')
-                if name and input_tag.get('type') != 'submit':
-                    form_data[name] = value
-
-            form_data['doDateHeureDemandee'] = tomorrow
-            
-            if form_method == 'POST':
-                response = session.post(submit_url, data=form_data, timeout=15)
-            else: 
-                response = session.get(submit_url, params=form_data, timeout=15)
-        else:
-            # >>> ACTION DE DEBUG FORCÉE : Affiche le HTML si le formulaire est introuvable.
-            html_snippet = response.text[:2000].replace('\n', ' ').replace('\r', '').strip()
-            return [], tomorrow, f"❌ DEBUG HTML EDI1 (Formulaire introuvable): {html_snippet}"
-        
-        # 4. Traitement de la page après filtrage
-        soup = BeautifulSoup(response.content, 'html.parser')
-
-        if "Aucun document" in response.text:
-            return [], tomorrow, "success"
-
-        # --- RECHERCHE ULTIME DU TABLEAU ---
-        table = None
-        column_indicators = ["commande", "livraison", "montant"]
-        all_tables = soup.find_all('table')
-        
-        for t in all_tables:
-            # ... Logique de recherche du tableau (identique) ...
-            if 'datalist' in t.get('class', []):
-                table = t; break
-            if re.search(r'data_?list|data_?table|display|dataTable|list|grid', t.get('class', [''])[0], re.IGNORECASE):
-                table = t; break
-            
-            header_row = t.find(['thead', 'tr']) 
-            if header_row:
-                header_text = header_row.text.lower()
-                matches = sum(1 for indicator in column_indicators if indicator in header_text)
-                if matches >= 2:
-                    table = t; break
-        
-        if not table:
-            header_text_element = soup.find(string=re.compile(r'N\s?°\s?commande', re.IGNORECASE))
-            if header_text_element:
-                parent = header_text_element.find_parent()
-                if parent:
-                    table = parent.find('table')
-        # --- FIN RECHERCHE ---
-        
-        if not table:
-            html_snippet = response.text[:2000].replace('\n', ' ').replace('\r', '').strip()
-            return [], tomorrow, f"❌ DEBUG HTML EDI1 (Tableau introuvable après filtre): {html_snippet}"
-
-        clients_autorises = [
-            "INTERMARCHE", "DEPOT CSD ALBY SUR CHERAN", "ITM LUXEMONT-ET-VILLOTTE"
-        ]
-        
-        # Le reste du parsing (inchangé)
-        commandes_brutes = []
-        rows = table.find_all('tr')[1:]
-        
-        for row in rows:
-            cols = row.find_all('td')
-            if len(cols) < 7: continue
-            
-            try:
-                numero = cols[0].text.strip()
-                client = cols[1].text.strip()
-                entrepot = cols[2].text.strip()
-                date_livraison = cols[4].text.strip()
-                montant_text = cols[6].text.strip()
-                montant = float(montant_text.replace(" ", "").replace(",", "."))
-                
-                if any(c in client.upper() for c in clients_autorises):
-                    if montant > 0:
-                        commandes_brutes.append({
-                            "numero": numero,
-                            "client": client,
-                            "entrepot": entrepot,
-                            "montant": montant,
-                            "date_livraison": date_livraison if date_livraison else tomorrow
-                        })
-            except: continue
-            
-        clients = {}
-        for cmd in commandes_brutes:
-            c = cmd["client"]
-            if c not in clients: clients[c] = {"montant_total": 0, "commandes": []}
-            clients[c]["montant_total"] += cmd["montant"]
-            clients[c]["commandes"].append(cmd["numero"])
-            
-        desadv_a_faire = []
-        for c, data in clients.items():
-            if data["montant_total"] >= 850:
-                desadv_a_faire.append({
-                    "entrepot": c,
-                    "montant_total": data["montant_total"],
-                    "nb_commandes": len(data["commandes"]),
-                    "commandes": data["commandes"]
-                })
-        
-        desadv_a_faire.sort(key=lambda x: x["montant_total"], reverse=True)
-        return desadv_a_faire, tomorrow, "success"
-        
-    except Exception as e:
-        return [], tomorrow, f"❌ Erreur technique EDI1: {str(e)}"
-
-# ============================================
-# SIDEBAR
-# ============================================
-
 with st.sidebar:
-    st.header("👤 Utilisateur")
-    st.markdown(f"**{st.session_state.username}**")
+    # Nom utilisateur en haut
+    st.markdown(f"### 👤 {st.session_state.username}")
     st.caption(f"Rôle: {st.session_state.user_role}")
     
     if st.button("🚪 Déconnexion", use_container_width=True):
         st.session_state.authenticated = False
         st.session_state.user_role = None
-        st.session_state.user_web_access = False
         st.session_state.username = None
         st.rerun()
     
     st.markdown("---")
-    st.header("📁 Fichiers")
     
     if st.button("🔄 Nouveau", use_container_width=True, type="primary"):
         st.session_state.key_cmd = f"cmd_{time.time()}"
@@ -655,6 +316,7 @@ with st.sidebar:
         st.rerun()
     
     st.markdown("---")
+    st.header("📁 Fichiers")
     
     commande_files = st.file_uploader(
         "📦 PDF(s) Commande client", 
@@ -688,157 +350,32 @@ with st.sidebar:
     else:
         st.info("Aucune comparaison enregistrée")
     
-    # Section DESADV
-    if st.session_state.user_web_access:
+    # Gestion utilisateurs (Admin uniquement)
+    if st.session_state.user_role == "admin":
         st.markdown("---")
-        st.header("🌐 Vérification DESADV")
-        
-        if st.button("🔍 Vérifier les DESADV", use_container_width=True, type="secondary"):
-            with st.spinner("🔄 Connexion aux plateformes EDI..."):
-                # APPEL DIRECT - PAS DE SIMULATION
-                auchan_data, auchan_date, auchan_status = fetch_desadv_from_auchan()
-                edi1_data, edi1_date, edi1_status = fetch_desadv_from_edi1()
-                
-                st.session_state.desadv_auchan = {
-                    "data": auchan_data,
-                    "date": auchan_date,
-                    "status": auchan_status
-                }
-                st.session_state.desadv_edi1 = {
-                    "data": edi1_data,
-                    "date": edi1_date,
-                    "status": edi1_status
-                }
+        st.header("👥 Gestion utilisateurs")
+        if st.button("⚙️ Gérer les utilisateurs", use_container_width=True):
+            st.session_state.show_help = "manage_users"
             st.rerun()
-        
-        if hasattr(st.session_state, 'desadv_auchan') or hasattr(st.session_state, 'desadv_edi1'):
-            total_desadv = 0
-            total_montant = 0
-            
-            if hasattr(st.session_state, 'desadv_auchan'):
-                auchan = st.session_state.desadv_auchan
-                if auchan["data"]:
-                    total_desadv += len(auchan["data"])
-                    total_montant += sum([d["montant_total"] for d in auchan["data"]])
-            
-            if hasattr(st.session_state, 'desadv_edi1'):
-                edi1 = st.session_state.desadv_edi1
-                if edi1["data"]:
-                    total_desadv += len(edi1["data"])
-                    total_montant += sum([d["montant_total"] for d in edi1["data"]])
-            
-            if total_desadv > 0:
-                st.success(f"✅ **{total_desadv} DESADV** à faire")
-                st.metric("Montant total", f"{total_montant:,.2f} €")
-                
-                if st.button("📋 Voir les détails", use_container_width=True):
-                    st.session_state.show_desadv_details = True
-                    st.rerun()
-                
-                if st.button("🗑️ Effacer", use_container_width=True):
-                    if hasattr(st.session_state, 'desadv_auchan'):
-                        delattr(st.session_state, 'desadv_auchan')
-                    if hasattr(st.session_state, 'desadv_edi1'):
-                        delattr(st.session_state, 'desadv_edi1')
-                    st.session_state.show_desadv_details = False
-                    st.rerun()
-            else:
-                # Si on a des statuts d'erreur, on les affiche ici
-                if hasattr(st.session_state, 'desadv_auchan') and st.session_state.desadv_auchan['status'] != 'success':
-                    st.error(f"Auchan: {st.session_state.desadv_auchan['status']}")
-                if hasattr(st.session_state, 'desadv_edi1') and st.session_state.desadv_edi1['status'] != 'success':
-                    st.error(f"EDI1: {st.session_state.desadv_edi1['status']}")
-                
-                if (hasattr(st.session_state, 'desadv_auchan') and st.session_state.desadv_auchan['status'] == 'success' and
-                    hasattr(st.session_state, 'desadv_edi1') and st.session_state.desadv_edi1['status'] == 'success'):
-                    st.info("Aucun DESADV à traiter")
-    else:
-        st.markdown("---")
-        st.info("🔒 Vérification DESADV\nAccès non autorisé pour votre compte")
-
-# ============================================
-# MAIN CONTENT
-# ============================================
-
-# Affichage détails DESADV
-if st.session_state.show_desadv_details:
+    
     st.markdown("---")
-    st.markdown("## 🌐 Détails des DESADV à traiter")
-    
-    col1, col2 = st.columns(2)
-    
-    # AUCHAN
-    with col1:
-        st.markdown("### 🔵 AUCHAN")
-        if hasattr(st.session_state, 'desadv_auchan'):
-            auchan = st.session_state.desadv_auchan
-            
-            if auchan["status"] != "success":
-                st.error(f"❌ {auchan['status']}")
-            
-            if auchan["data"]:
-                st.success(f"📅 Livraison: **{auchan['date']}**")
-                st.metric("Nombre de DESADV", len(auchan["data"]))
-                st.metric("Montant total", f"{sum([d['montant_total'] for d in auchan['data']]):,.2f} €")
-                
-                st.markdown("---")
-                for idx, desadv in enumerate(auchan["data"], 1):
-                    with st.expander(f"📦 {idx}. {desadv['entrepot']}", expanded=False):
-                        st.metric("Montant", f"{desadv['montant_total']:,.2f} €")
-                        st.write(f"**{desadv['nb_commandes']} commande(s):**")
-                        st.write(", ".join(desadv['commandes']))
-            else:
-                st.info("✅ Aucun DESADV Auchan à traiter")
-        else:
-            st.info("Aucune donnée disponible")
-    
-    # EDI1
-    with col2:
-        st.markdown("### 🟢 EDI1 (ITM, CSD)")
-        if hasattr(st.session_state, 'desadv_edi1'):
-            edi1 = st.session_state.desadv_edi1
-            
-            if edi1["status"] != "success":
-                st.error(f"❌ {edi1['status']}")
-            
-            if edi1["data"]:
-                st.success(f"📅 Livraison: **{edi1['date']}**")
-                st.metric("Nombre de DESADV", len(edi1["data"]))
-                st.metric("Montant total", f"{sum([d['montant_total'] for d in edi1['data']]):,.2f} €")
-                
-                st.markdown("---")
-                for idx, desadv in enumerate(edi1["data"], 1):
-                    with st.expander(f"📦 {idx}. {desadv['entrepot']}", expanded=False):
-                        st.metric("Montant", f"{desadv['montant_total']:,.2f} €")
-                        st.write(f"**{desadv['nb_commandes']} commande(s):**")
-                        st.write(", ".join(desadv['commandes']))
-            else:
-                st.info("✅ Aucun DESADV EDI1 à traiter")
-        else:
-            st.info("Aucune donnée disponible")
-    
-    if st.button("❌ Fermer les détails", type="secondary"):
-        st.session_state.show_desadv_details = False
+    if st.button("❓ Comment utiliser", use_container_width=True):
+        st.session_state.show_help = "guide"
         st.rerun()
-    
-    st.markdown("---")
 
-# Boutons principaux
-col_btn1, col_btn2 = st.columns([3, 1])
-
-with col_btn1:
-    comparison_btn = st.button("🔍 Lancer la comparaison", use_container_width=True, type="primary")
-
-with col_btn2:
+# Boutons principaux avec disposition optimisée
+col1, col2 = st.columns([4, 1])
+with col1:
+    launch_button = st.button("🔍 Lancer la comparaison", use_container_width=True, type="primary")
+with col2:
     if st.button("❓ Aide", use_container_width=True):
         st.session_state.show_help = "guide"
         st.rerun()
 
-if comparison_btn:
+if launch_button:
     if not commande_files or not bl_files:
         st.error("⚠️ Veuillez téléverser des commandes ET des bons de livraison.")
         st.stop()
-    
     with st.spinner("🔄 Analyse en cours..."):
         commandes_dict = defaultdict(list)
         all_command_records = []
@@ -847,12 +384,10 @@ if comparison_btn:
             all_command_records.extend(res["records"])
             for rec in res["records"]:
                 commandes_dict[rec["order_num"]].append(rec)
-        
         for k in commandes_dict.keys():
             df = pd.DataFrame(commandes_dict[k])
             df = df.groupby(["ref", "code_article"], as_index=False).agg({"qte_commande": "sum"})
             commandes_dict[k] = df
-        
         bls_dict = defaultdict(list)
         all_bl_records = []
         for f in bl_files:
@@ -860,31 +395,26 @@ if comparison_btn:
             all_bl_records.extend(res["records"])
             for rec in res["records"]:
                 bls_dict[rec["order_num"]].append(rec)
-        
         for k in bls_dict.keys():
             df = pd.DataFrame(bls_dict[k])
             df = df.groupby("ref", as_index=False).agg({"qte_bl": "sum"})
             bls_dict[k] = df
-        
         results = {}
         for order_num, df_cmd in commandes_dict.items():
             df_bl = bls_dict.get(order_num, pd.DataFrame(columns=["ref", "qte_bl"]))
             merged = pd.merge(df_cmd, df_bl, on="ref", how="left")
             merged["qte_commande"] = pd.to_numeric(merged["qte_commande"], errors="coerce").fillna(0)
             merged["qte_bl"] = pd.to_numeric(merged.get("qte_bl", pd.Series()), errors="coerce").fillna(0)
-            
             def status_row(r):
                 if r["qte_bl"] == 0:
                     return "MISSING_IN_BL"
                 return "OK" if r["qte_commande"] == r["qte_bl"] else "QTY_DIFF"
-            
             merged["status"] = merged.apply(status_row, axis=1)
             merged["diff"] = merged["qte_bl"] - merged["qte_commande"]
             merged["taux_service"] = merged.apply(
                 lambda r: calculate_service_rate(r["qte_commande"], r["qte_bl"]), axis=1
             )
             results[order_num] = merged
-        
         comparison_data = {
             "timestamp": datetime.now(),
             "results": results,
@@ -894,7 +424,6 @@ if comparison_btn:
         }
         st.session_state.historique.append(comparison_data)
 
-# Affichage des résultats
 if st.session_state.historique:
     latest = st.session_state.historique[-1]
     results = latest["results"]
@@ -926,7 +455,6 @@ if st.session_state.historique:
         total_cmd = df["qte_commande"].sum()
         total_bl = df["qte_bl"].sum()
         taux = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
-        
         with st.expander(
             f"📦 Commande **{order_num}** — Taux de service: **{taux:.1f}%** | "
             f"✅ {n_ok} | ⚠️ {n_diff} | ❌ {n_miss}"
@@ -938,7 +466,6 @@ if st.session_state.historique:
                 st.metric("Livré", int(total_bl))
             with col3:
                 st.metric("Manquant", int(total_cmd - total_bl))
-            
             def color_status(val):
                 if val == "OK":
                     return "background-color: #d4edda"
@@ -947,7 +474,6 @@ if st.session_state.historique:
                 if val == "MISSING_IN_BL":
                     return "background-color: #f8d7da"
                 return ""
-            
             st.dataframe(
                 df.style.applymap(color_status, subset=["status"]),
                 use_container_width=True,
@@ -956,11 +482,9 @@ if st.session_state.historique:
     
     st.markdown("---")
     st.markdown("### 📥 Export")
-    
     output = io.BytesIO()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"Comparaison_{timestamp}.xlsx"
-    
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         for order_num, df in results.items():
             total_bl = df["qte_bl"].sum() if "qte_bl" in df.columns else 0
@@ -969,13 +493,11 @@ if st.session_state.historique:
             df_export = df.copy()
             sheet_name = f"C_{order_num}"[:31]
             df_export.to_excel(writer, sheet_name=sheet_name, index=False)
-            
             workbook = writer.book
             worksheet = writer.sheets[sheet_name]
             ok_format = workbook.add_format({'bg_color': '#d4edda'})
             diff_format = workbook.add_format({'bg_color': '#fff3cd'})
             miss_format = workbook.add_format({'bg_color': '#f8d7da'})
-            
             for idx, row in df_export.iterrows():
                 excel_row = idx + 1
                 if row.get('status') == 'OK':
@@ -984,7 +506,6 @@ if st.session_state.historique:
                     worksheet.set_row(excel_row, None, diff_format)
                 elif row.get('status') == 'MISSING_IN_BL':
                     worksheet.set_row(excel_row, None, miss_format)
-        
         summary_data = {
             'Commande': [],
             'Taux de service (%)': [],
@@ -995,7 +516,6 @@ if st.session_state.historique:
             'Articles différence': [],
             'Articles manquants': []
         }
-        
         for order_num, df in results.items():
             total_bl = df["qte_bl"].sum() if "qte_bl" in df.columns else 0
             if hide_unmatched and total_bl == 0:
@@ -1003,7 +523,6 @@ if st.session_state.historique:
             total_cmd = df["qte_commande"].sum()
             total_bl = df["qte_bl"].sum()
             taux = (total_bl / total_cmd * 100) if total_cmd > 0 else 0
-            
             summary_data['Commande'].append(order_num)
             summary_data['Taux de service (%)'].append(round(taux, 2))
             summary_data['Qté commandée'].append(int(total_cmd))
@@ -1012,10 +531,8 @@ if st.session_state.historique:
             summary_data['Articles OK'].append((df["status"] == "OK").sum())
             summary_data['Articles différence'].append((df["status"] == "QTY_DIFF").sum())
             summary_data['Articles manquants'].append((df["status"] == "MISSING_IN_BL").sum())
-        
         df_summary = pd.DataFrame(summary_data)
         df_summary.to_excel(writer, sheet_name="Récapitulatif", index=False)
-    
     col1, col2 = st.columns([3, 1])
     with col1:
         st.download_button(
@@ -1032,7 +549,6 @@ if st.session_state.historique:
     
     st.markdown("---")
     st.markdown("### 📊 Vue d'ensemble")
-    
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.markdown(f"""
@@ -1062,7 +578,6 @@ if st.session_state.historique:
             <div class="kpi-value">{int(total_manquant)}</div>
         </div>
         """, unsafe_allow_html=True)
-    
     st.markdown("<br>", unsafe_allow_html=True)
     
     col1, col2 = st.columns(2)
@@ -1081,7 +596,6 @@ if st.session_state.historique:
             )
             fig_status.update_traces(textposition='inside', textinfo='percent+label')
             st.plotly_chart(fig_status, use_container_width=True)
-        
         with col2:
             service_rates = []
             for order_num, df in results.items():
@@ -1137,7 +651,6 @@ if st.session_state.historique:
                 st.metric(f"Commande {order_num}", f"{rate:.1f}%")
     
     tabs = st.tabs(["📈 Statistiques", "🏆 Top produits"])
-    
     with tabs[0]:
         st.markdown("### 📈 Articles manquants par code article")
         missing_by_code = {}
@@ -1150,7 +663,6 @@ if st.session_state.historique:
                 if code not in missing_by_code:
                     missing_by_code[code] = {"Code article": code, "Qté totale manquante": 0}
                 missing_by_code[code]["Qté totale manquante"] += int(row["qte_commande"])
-        
         if missing_by_code:
             df_missing = pd.DataFrame(list(missing_by_code.values()))
             df_missing = df_missing.sort_values("Qté totale manquante", ascending=False).head(10)
@@ -1158,7 +670,6 @@ if st.session_state.historique:
             st.dataframe(df_missing, use_container_width=True, hide_index=True)
         else:
             st.success("✅ Aucun article manquant !")
-    
     with tabs[1]:
         st.markdown("### 🏆 Classement des produits")
         all_products = []
@@ -1172,12 +683,10 @@ if st.session_state.historique:
                     "Qté commandée": int(row["qte_commande"]),
                     "Qté livrée": int(row["qte_bl"])
                 })
-        
         if all_products:
             df_products = pd.DataFrame(all_products)
         else:
             df_products = pd.DataFrame(columns=["Code article", "EAN", "Qté commandée", "Qté livrée"])
-        
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("#### 📦 Top 10 commandés")
@@ -1196,8 +705,78 @@ if st.session_state.historique:
 else:
     st.info("👆 Téléversez vos fichiers et lancez la comparaison pour commencer")
 
-# Modal d'aide
-if st.session_state.show_help == "guide":
+# Modal d'aide / Configuration / Gestion utilisateurs
+if st.session_state.show_help == "manage_users":
+    st.markdown("---")
+    st.markdown("## 👥 Gestion des utilisateurs")
+    
+    if st.session_state.user_role != "admin":
+        st.error("🔒 Accès refusé")
+        st.stop()
+    
+    tabs = st.tabs(["📋 Liste", "➕ Ajouter", "✏️ Modifier"])
+    
+    with tabs[0]:
+        st.markdown("### Liste des utilisateurs")
+        users_data = []
+        for username, data in USERS_DB.items():
+            users_data.append({
+                "Utilisateur": username,
+                "Rôle": data["role"]
+            })
+        df_users = pd.DataFrame(users_data)
+        st.dataframe(df_users, use_container_width=True, hide_index=True)
+        
+        st.markdown("---")
+        st.markdown("### Supprimer un utilisateur")
+        user_to_delete = st.selectbox("Sélectionner un utilisateur", [u for u in USERS_DB.keys() if u != "admin"])
+        if st.button("🗑️ Supprimer", type="secondary"):
+            if delete_user(user_to_delete):
+                st.success(f"✅ Utilisateur {user_to_delete} supprimé")
+                time.sleep(1)
+                st.rerun()
+    
+    with tabs[1]:
+        st.markdown("### Ajouter un utilisateur")
+        with st.form("add_user"):
+            new_username = st.text_input("👤 Nom d'utilisateur")
+            new_password = st.text_input("🔒 Mot de passe", type="password")
+            new_role = st.selectbox("Rôle", ["user", "admin"])
+            
+            if st.form_submit_button("➕ Ajouter", type="primary"):
+                if new_username and new_password:
+                    if new_username in USERS_DB:
+                        st.error("❌ Cet utilisateur existe déjà")
+                    else:
+                        save_user(new_username, new_password, new_role)
+                        st.success(f"✅ Utilisateur {new_username} ajouté")
+                        time.sleep(1)
+                        st.rerun()
+                else:
+                    st.error("⚠️ Veuillez remplir tous les champs")
+    
+    with tabs[2]:
+        st.markdown("### Modifier un utilisateur")
+        user_to_edit = st.selectbox("Sélectionner", list(USERS_DB.keys()))
+        
+        if user_to_edit:
+            current_data = USERS_DB[user_to_edit]
+            with st.form("edit_user"):
+                edit_password = st.text_input("🔒 Nouveau mot de passe (laisser vide pour ne pas changer)", type="password")
+                edit_role = st.selectbox("Rôle", ["user", "admin"], index=0 if current_data["role"] == "user" else 1)
+                
+                if st.form_submit_button("💾 Sauvegarder", type="primary"):
+                    new_pwd = edit_password if edit_password else current_data["password"]
+                    save_user(user_to_edit, new_pwd, edit_role)
+                    st.success(f"✅ Utilisateur {user_to_edit} modifié")
+                    time.sleep(1)
+                    st.rerun()
+    
+    if st.button("↩️ Retour", type="secondary"):
+        st.session_state.show_help = False
+        st.rerun()
+
+elif st.session_state.show_help == "guide":
     st.markdown("---")
     st.markdown("## 📖 Guide d'utilisation")
     
@@ -1235,23 +814,6 @@ if st.session_state.show_help == "guide":
         
         ### Historique
         Toutes vos comparaisons sont sauvegardées temporairement dans la session.
-        
-        ### Vérification DESADV (Admin uniquement)
-        Connecte automatiquement aux sites EDI pour récupérer les commandes à traiter.
-        """)
-    
-    with st.expander("👥 Gestion des utilisateurs (Admin)"):
-        st.markdown("""
-        ### Ajouter un nouvel utilisateur :
-        
-        Dans le code, section `USERS_DB`, ajoutez :
-        ```python
-        "nom_utilisateur": {
-            "password": "mot_de_passe",
-            "role": "admin",  # ou "user"
-            "web_access": True  # ou False
-        }
-        ```
         """)
     
     if st.button("✅ Compris, retour à l'outil", type="primary"):
