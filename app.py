@@ -295,7 +295,7 @@ def calculate_service_rate(qte_cmd, qte_bl):
 def fetch_desadv_from_auchan():
     """
     Connexion RÉELLE au site Auchan ATGPEDI
-    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Application du filtre de date (POST Complet).
+    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Application du filtre de date (POST Final vers index.php).
     """
     from datetime import datetime, timedelta
     import requests
@@ -320,7 +320,7 @@ def fetch_desadv_from_auchan():
         if not username or not password:
             return [], tomorrow, "❌ Identifiants 'AUCHAN_...' manquants dans Secrets"
         
-        base_url = "https://auchan.atgpedi.net/index.php"
+        base_url = "https://auchan.atgpedi.net/index.php" # URL de base
         
         # 1. Connexion (POST)
         session.get(base_url, timeout=10)
@@ -335,35 +335,35 @@ def fetch_desadv_from_auchan():
         # 2. Navigation : Clic sur le lien "Commandes" (gui.php)
         commande_link = soup.find('a', href=re.compile(r'gui\.php.*documents?_commandes?_liste'))
         
-        post_url = None
         if commande_link and 'href' in commande_link.attrs:
             post_url = urljoin(base_url, commande_link['href'])
             response = session.get(post_url, timeout=15)
         else:
              params = {"query": "documents_commandes_liste", "page": "documents_commandes_liste"}
              response = session.get(base_url, params=params, timeout=15)
-             post_url = response.url # L'URL après navigation
+             post_url = response.url 
 
-        # 3. Application du filtre de date (POST Complet avec champs cachés)
+        # 3. Application du filtre de date (POST Final vers index.php)
         soup = BeautifulSoup(response.content, 'html.parser')
-        submit_url = post_url
+        submit_url = base_url # Ciblage de l'URL de base pour le traitement POST
         form_data = {}
         
-        # --- Collecter TOUS les champs cachés de la page NON filtrée ---
+        # --- Collecter TOUS les champs cachés de la page (token inclus) ---
         for input_tag in soup.find_all('input', {'type': 'hidden'}):
             name = input_tag.get('name')
             value = input_tag.get('value', '')
             if name:
                 form_data[name] = value
 
-        # Assurer la présence des paramètres clés (même s'ils n'étaient pas cachés)
+        # Ajout des paramètres de filtre/contexte non-cachés
         form_data['page'] = 'documents_commandes_liste'
         form_data['lines_per_page'] = '1000'
-
+        form_data['typeDate'] = 'LIVR' # Date de Livraison
+        
         # Surcharge du champ de date (le filtre souhaité)
         form_data['doDateHeureDemandee'] = tomorrow
         
-        # Soumission POST pour filtrer (simule l'appui sur 'Entrée' après remplissage des champs cachés)
+        # Soumission POST forcée vers index.php
         response = session.post(submit_url, data=form_data, timeout=15)
         
         # 4. Traitement de la page après filtrage
@@ -372,7 +372,7 @@ def fetch_desadv_from_auchan():
         if "Aucun document" in response.text:
             return [], tomorrow, "success"
             
-        # --- RECHERCHE ULTIME DU TABLEAU (Logique inchangée) ---
+        # --- RECHERCHE ULTIME DU TABLEAU ---
         table = None
         column_indicators = ["commande", "livraison", "montant"] 
         all_tables = soup.find_all('table')
@@ -391,21 +391,14 @@ def fetch_desadv_from_auchan():
                     table = t; break
         
         if not table:
-            header_text_element = soup.find(string=re.compile(r'N\s?°\s?commande', re.IGNORECASE))
-            if header_text_element:
-                parent = header_text_element.find_parent()
-                if parent:
-                    table = parent.find('table')
-        # --- FIN RECHERCHE ---
-        
-        if not table:
             # Échec final avec DEBUG HTML
             html_snippet = response.text[:2000].replace('\n', ' ').replace('\r', '').strip()
-            return [], tomorrow, f"❌ DEBUG HTML AUCHAN (Tableau introuvable après POST complet): {html_snippet}"
+            return [], tomorrow, f"❌ DEBUG HTML AUCHAN (Échec final POST index.php): {html_snippet}"
         
         # Le reste du parsing (inchangé)
         commandes_brutes = []
         rows = table.find_all('tr')
+        
         # ... (Logique de parsing) ...
         for row in rows[1:]:
             cols = row.find_all('td')
