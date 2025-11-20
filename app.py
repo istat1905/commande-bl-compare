@@ -337,22 +337,46 @@ def fetch_desadv_from_auchan():
         }
         response = session.get(base_url, params=params, timeout=15)
         
-        # Vérification simple
+        # Vérification simple de non-connexion
         if "Connexion" in response.text or "Mot de passe" in response.text:
              return [], tomorrow, "❌ Échec connexion (Login/Mdp incorrects ?)"
 
+        # Vérification si la page est vide (pas d'erreur, juste rien à afficher)
+        if "Aucun document" in response.text:
+            return [], tomorrow, "success" # Connecté mais vide
+
+        # --- DÉBUT DE LA RECHERCHE ROBUSTE DU TABLEAU (CORRECTION) ---
         soup = BeautifulSoup(response.content, 'html.parser')
+        table = None
+        
+        # Tentative 1: Class standard 'datalist'
         table = soup.find('table', {'class': 'datalist'})
-        if not table: table = soup.find('table')
+        
+        # Tentative 2: N'importe quelle table (la plus simple)
+        if not table: 
+            table = soup.find('table')
+            
+        # Tentative 3 (Sécurité): Chercher un en-tête de colonne pour localiser la table parente
+        if not table:
+            key_texts = ["N° commande", "Date de livraison", "Montant Total"]
+            for key_text in key_texts:
+                # Chercher un tag <td> ou <th> qui contient un des textes clés
+                cell = soup.find(['td', 'th'], string=lambda t: t and key_text in t)
+                if cell:
+                    # Remonter au parent <table>
+                    table = cell.find_parent('table')
+                    if table:
+                        break # Table trouvée
         
         if not table:
-            if "Aucun document" in response.text:
-                return [], tomorrow, "success" # Connecté mais vide
-            return [], tomorrow, "⚠️ Connecté mais tableau introuvable"
+            # Renvoyer l'erreur si aucune méthode n'a fonctionné
+            return [], tomorrow, "⚠️ Connecté mais tableau introuvable (Structure HTML changée)"
+        # --- FIN DE LA RECHERCHE ROBUSTE DU TABLEAU ---
         
         commandes_brutes = []
         rows = table.find_all('tr')
         
+        # Le reste du code de parsing reste inchangé
         for row in rows[1:]:
             cols = row.find_all('td')
             if len(cols) < 4: continue
