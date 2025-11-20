@@ -295,7 +295,7 @@ def calculate_service_rate(qte_cmd, qte_bl):
 def fetch_desadv_from_auchan():
     """
     Connexion RÉELLE au site Auchan ATGPEDI
-    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Application du filtre de date (Injection POST manuelle).
+    Simule la navigation : Login -> Clic sur le lien 'Commandes' -> Application du filtre de date (POST Complet).
     """
     from datetime import datetime, timedelta
     import requests
@@ -344,21 +344,27 @@ def fetch_desadv_from_auchan():
              response = session.get(base_url, params=params, timeout=15)
              post_url = response.url # L'URL après navigation
 
-        # 3. Application du filtre de date (Injection POST Forcée)
-        # On utilise l'URL post_url (gui.php?page=documents_commandes_liste)
+        # 3. Application du filtre de date (POST Complet avec champs cachés)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        submit_url = post_url
+        form_data = {}
         
-        # Ce payload est reconstitué manuellement pour simuler l'appui sur "Entrée"
-        # Il doit contenir les champs cachés essentiels et la date de filtre
-        forced_post_data = {
-            'page': 'documents_commandes_liste',          # Assure le contexte de la page
-            'doDateHeureDemandee': tomorrow,              # Le champ de date
-            'typeDate': 'LIVR',                           # Type de date de livraison (paramètre ATGPEDI standard)
-            'lines_per_page': '1000'                      # Afficher toutes les lignes
-            # Pas de 'submit' ou autre bouton pour simuler l'appui sur 'Entrée'
-        }
+        # --- Collecter TOUS les champs cachés de la page NON filtrée ---
+        for input_tag in soup.find_all('input', {'type': 'hidden'}):
+            name = input_tag.get('name')
+            value = input_tag.get('value', '')
+            if name:
+                form_data[name] = value
+
+        # Assurer la présence des paramètres clés (même s'ils n'étaient pas cachés)
+        form_data['page'] = 'documents_commandes_liste'
+        form_data['lines_per_page'] = '1000'
+
+        # Surcharge du champ de date (le filtre souhaité)
+        form_data['doDateHeureDemandee'] = tomorrow
         
-        # Utilisation de la méthode POST pour soumettre les données de filtre
-        response = session.post(post_url, data=forced_post_data, timeout=15)
+        # Soumission POST pour filtrer (simule l'appui sur 'Entrée' après remplissage des champs cachés)
+        response = session.post(submit_url, data=form_data, timeout=15)
         
         # 4. Traitement de la page après filtrage
         soup = BeautifulSoup(response.content, 'html.parser')
@@ -366,7 +372,7 @@ def fetch_desadv_from_auchan():
         if "Aucun document" in response.text:
             return [], tomorrow, "success"
             
-        # --- RECHERCHE ULTIME DU TABLEAU ---
+        # --- RECHERCHE ULTIME DU TABLEAU (Logique inchangée) ---
         table = None
         column_indicators = ["commande", "livraison", "montant"] 
         all_tables = soup.find_all('table')
@@ -395,26 +401,24 @@ def fetch_desadv_from_auchan():
         if not table:
             # Échec final avec DEBUG HTML
             html_snippet = response.text[:2000].replace('\n', ' ').replace('\r', '').strip()
-            return [], tomorrow, f"❌ DEBUG HTML AUCHAN (Tableau introuvable après filtre POST): {html_snippet}"
+            return [], tomorrow, f"❌ DEBUG HTML AUCHAN (Tableau introuvable après POST complet): {html_snippet}"
         
         # Le reste du parsing (inchangé)
         commandes_brutes = []
         rows = table.find_all('tr')
-        
+        # ... (Logique de parsing) ...
         for row in rows[1:]:
             cols = row.find_all('td')
             if len(cols) < 4: continue
             
             try:
                 numero = cols[0].text.strip()
-                
                 date_livraison = None
                 for col in cols:
                     txt = col.text.strip()
                     if re.match(r'\d{2}/\d{2}/\d{4}', txt):
                         date_livraison = txt
                         break
-                
                 montant = 0.0
                 for col in cols:
                     txt = col.text.strip().replace(" ", "").replace(",", ".")
