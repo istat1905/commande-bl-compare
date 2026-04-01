@@ -23,7 +23,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Logo plus haut
 st.markdown("""
 <style>
     .logo-container {
@@ -40,7 +39,7 @@ st.markdown("""
     }
     .subtitle {
         font-size: 1.1rem;
-        color: #666;
+        color: #666666;
         margin-bottom: 2rem;
     }
     .kpi-card {
@@ -68,21 +67,6 @@ st.markdown("""
     }
     .info-card {
         background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-    }
-    .help-button {
-        position: fixed;
-        bottom: 20px;
-        right: 20px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 15px 25px;
-        border-radius: 50px;
-        font-size: 16px;
-        font-weight: bold;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-        cursor: pointer;
-        z-index: 999;
-        border: none;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -120,18 +104,15 @@ USERS_DB = {
 }
 
 def check_password(username, password):
-    """Vérifie les identifiants utilisateur"""
     if username in USERS_DB and USERS_DB[username]["password"] == password:
         return True, USERS_DB[username]["role"]
     return False, None
 
 def save_user(username, password, role):
-    """Ajoute ou modifie un utilisateur"""
     USERS_DB[username] = {"password": password, "role": role}
     return True
 
 def delete_user(username):
-    """Supprime un utilisateur"""
     if username in USERS_DB and username != "admin":
         del USERS_DB[username]
         return True
@@ -297,7 +278,6 @@ def calculate_service_rate(qte_cmd, qte_bl):
     return min((qte_bl / qte_cmd) * 100, 100)
 
 with st.sidebar:
-    # Nom utilisateur en haut
     st.markdown(f"### 👤 {st.session_state.username}")
     st.caption(f"Rôle: {st.session_state.user_role}")
     
@@ -354,25 +334,141 @@ with st.sidebar:
     if st.session_state.user_role == "admin":
         st.markdown("---")
         st.header("👥 Gestion utilisateurs")
+        # CORRECTION : suppression du st.rerun() après le clic
         if st.button("⚙️ Gérer les utilisateurs", use_container_width=True):
             st.session_state.show_help = "manage_users"
-            st.rerun()
     
     st.markdown("---")
+    # CORRECTION : suppression du st.rerun() après le clic
     if st.button("❓ Comment utiliser", use_container_width=True):
         st.session_state.show_help = "guide"
-        st.rerun()
 
-# Boutons principaux avec disposition optimisée
+# Boutons principaux
 col1, col2 = st.columns([4, 1])
 with col1:
     launch_button = st.button("🔍 Lancer la comparaison", use_container_width=True, type="primary")
 with col2:
+    # CORRECTION : suppression du st.rerun() après le clic
     if st.button("❓ Aide", use_container_width=True):
         st.session_state.show_help = "guide"
+
+# Affichage aide / gestion utilisateurs en priorité
+if st.session_state.show_help == "manage_users":
+    st.markdown("---")
+    st.markdown("## 👥 Gestion des utilisateurs")
+    
+    if st.session_state.user_role != "admin":
+        st.error("🔒 Accès refusé")
+        st.stop()
+    
+    tabs = st.tabs(["📋 Liste", "➕ Ajouter", "✏️ Modifier"])
+    
+    with tabs[0]:
+        st.markdown("### Liste des utilisateurs")
+        users_data = []
+        for uname, udata in USERS_DB.items():
+            users_data.append({
+                "Utilisateur": uname,
+                "Rôle": udata["role"]
+            })
+        df_users = pd.DataFrame(users_data)
+        st.dataframe(df_users, use_container_width=True, hide_index=True)
+        
+        st.markdown("---")
+        st.markdown("### Supprimer un utilisateur")
+        user_to_delete = st.selectbox("Sélectionner un utilisateur", [u for u in USERS_DB.keys() if u != "admin"])
+        if st.button("🗑️ Supprimer", type="secondary"):
+            if delete_user(user_to_delete):
+                st.success(f"✅ Utilisateur {user_to_delete} supprimé")
+                time.sleep(1)
+                st.rerun()
+    
+    with tabs[1]:
+        st.markdown("### Ajouter un utilisateur")
+        with st.form("add_user"):
+            new_username = st.text_input("👤 Nom d'utilisateur")
+            new_password = st.text_input("🔒 Mot de passe", type="password")
+            new_role = st.selectbox("Rôle", ["user", "admin"])
+            
+            if st.form_submit_button("➕ Ajouter", type="primary"):
+                if new_username and new_password:
+                    if new_username in USERS_DB:
+                        st.error("❌ Cet utilisateur existe déjà")
+                    else:
+                        save_user(new_username, new_password, new_role)
+                        st.success(f"✅ Utilisateur {new_username} ajouté")
+                        time.sleep(1)
+                        st.rerun()
+                else:
+                    st.error("⚠️ Veuillez remplir tous les champs")
+    
+    with tabs[2]:
+        st.markdown("### Modifier un utilisateur")
+        user_to_edit = st.selectbox("Sélectionner", list(USERS_DB.keys()))
+        
+        if user_to_edit:
+            current_data = USERS_DB[user_to_edit]
+            with st.form("edit_user"):
+                edit_password = st.text_input("🔒 Nouveau mot de passe (laisser vide pour ne pas changer)", type="password")
+                edit_role = st.selectbox("Rôle", ["user", "admin"], index=0 if current_data["role"] == "user" else 1)
+                
+                if st.form_submit_button("💾 Sauvegarder", type="primary"):
+                    new_pwd = edit_password if edit_password else current_data["password"]
+                    save_user(user_to_edit, new_pwd, edit_role)
+                    st.success(f"✅ Utilisateur {user_to_edit} modifié")
+                    time.sleep(1)
+                    st.rerun()
+    
+    if st.button("↩️ Retour", type="secondary"):
+        st.session_state.show_help = False
         st.rerun()
 
-if launch_button:
+elif st.session_state.show_help == "guide":
+    st.markdown("---")
+    st.markdown("## 📖 Guide d'utilisation")
+    
+    with st.expander("🚀 Démarrage rapide", expanded=True):
+        st.markdown("""
+        ### Étapes principales :
+        1. **Téléversez vos PDF** dans la barre latérale gauche
+           - 📦 Commandes client (un ou plusieurs)
+           - 📋 Bons de livraison (un ou plusieurs)
+        
+        2. **Cliquez sur "🔍 Lancer la comparaison"**
+        
+        3. **Consultez les résultats** :
+           - Détails par commande
+           - Rapport Excel téléchargeable
+           - Statistiques et KPIs
+        """)
+    
+    with st.expander("📊 Comprendre les résultats"):
+        st.markdown("""
+        ### Codes couleur :
+        - 🟢 **OK** : Quantité commandée = Quantité livrée
+        - 🟡 **QTY_DIFF** : Différence de quantité
+        - 🔴 **MISSING_IN_BL** : Article non trouvé dans le BL
+        
+        ### KPIs :
+        - **Taux de service** : (Qté livrée / Qté commandée) × 100
+        - **Total manquant** : Somme des articles non livrés
+        """)
+    
+    with st.expander("⚙️ Options avancées"):
+        st.markdown("""
+        ### Masquer les commandes sans correspondance
+        Exclut de l'export Excel les commandes qui n'ont pas de BL correspondant.
+        
+        ### Historique
+        Toutes vos comparaisons sont sauvegardées temporairement dans la session.
+        """)
+    
+    if st.button("✅ Compris, retour à l'outil", type="primary"):
+        st.session_state.show_help = False
+        st.rerun()
+
+# Contenu principal — affiché seulement si pas en mode aide
+elif launch_button:
     if not commande_files or not bl_files:
         st.error("⚠️ Veuillez téléverser des commandes ET des bons de livraison.")
         st.stop()
@@ -424,7 +520,7 @@ if launch_button:
         }
         st.session_state.historique.append(comparison_data)
 
-if st.session_state.historique:
+if st.session_state.historique and not st.session_state.show_help:
     latest = st.session_state.historique[-1]
     results = latest["results"]
     commandes_dict = latest["commandes_dict"]
@@ -702,126 +798,12 @@ if st.session_state.historique:
                 st.dataframe(top_livre.reset_index(), use_container_width=True, hide_index=True)
             else:
                 st.info("Aucun produit à afficher.")
-else:
+
+elif not st.session_state.show_help and not st.session_state.historique:
     st.info("👆 Téléversez vos fichiers et lancez la comparaison pour commencer")
 
-# Modal d'aide / Configuration / Gestion utilisateurs
-if st.session_state.show_help == "manage_users":
-    st.markdown("---")
-    st.markdown("## 👥 Gestion des utilisateurs")
-    
-    if st.session_state.user_role != "admin":
-        st.error("🔒 Accès refusé")
-        st.stop()
-    
-    tabs = st.tabs(["📋 Liste", "➕ Ajouter", "✏️ Modifier"])
-    
-    with tabs[0]:
-        st.markdown("### Liste des utilisateurs")
-        users_data = []
-        for username, data in USERS_DB.items():
-            users_data.append({
-                "Utilisateur": username,
-                "Rôle": data["role"]
-            })
-        df_users = pd.DataFrame(users_data)
-        st.dataframe(df_users, use_container_width=True, hide_index=True)
-        
-        st.markdown("---")
-        st.markdown("### Supprimer un utilisateur")
-        user_to_delete = st.selectbox("Sélectionner un utilisateur", [u for u in USERS_DB.keys() if u != "admin"])
-        if st.button("🗑️ Supprimer", type="secondary"):
-            if delete_user(user_to_delete):
-                st.success(f"✅ Utilisateur {user_to_delete} supprimé")
-                time.sleep(1)
-                st.rerun()
-    
-    with tabs[1]:
-        st.markdown("### Ajouter un utilisateur")
-        with st.form("add_user"):
-            new_username = st.text_input("👤 Nom d'utilisateur")
-            new_password = st.text_input("🔒 Mot de passe", type="password")
-            new_role = st.selectbox("Rôle", ["user", "admin"])
-            
-            if st.form_submit_button("➕ Ajouter", type="primary"):
-                if new_username and new_password:
-                    if new_username in USERS_DB:
-                        st.error("❌ Cet utilisateur existe déjà")
-                    else:
-                        save_user(new_username, new_password, new_role)
-                        st.success(f"✅ Utilisateur {new_username} ajouté")
-                        time.sleep(1)
-                        st.rerun()
-                else:
-                    st.error("⚠️ Veuillez remplir tous les champs")
-    
-    with tabs[2]:
-        st.markdown("### Modifier un utilisateur")
-        user_to_edit = st.selectbox("Sélectionner", list(USERS_DB.keys()))
-        
-        if user_to_edit:
-            current_data = USERS_DB[user_to_edit]
-            with st.form("edit_user"):
-                edit_password = st.text_input("🔒 Nouveau mot de passe (laisser vide pour ne pas changer)", type="password")
-                edit_role = st.selectbox("Rôle", ["user", "admin"], index=0 if current_data["role"] == "user" else 1)
-                
-                if st.form_submit_button("💾 Sauvegarder", type="primary"):
-                    new_pwd = edit_password if edit_password else current_data["password"]
-                    save_user(user_to_edit, new_pwd, edit_role)
-                    st.success(f"✅ Utilisateur {user_to_edit} modifié")
-                    time.sleep(1)
-                    st.rerun()
-    
-    if st.button("↩️ Retour", type="secondary"):
-        st.session_state.show_help = False
-        st.rerun()
-
-elif st.session_state.show_help == "guide":
-    st.markdown("---")
-    st.markdown("## 📖 Guide d'utilisation")
-    
-    with st.expander("🚀 Démarrage rapide", expanded=True):
-        st.markdown("""
-        ### Étapes principales :
-        1. **Téléversez vos PDF** dans la barre latérale gauche
-           - 📦 Commandes client (un ou plusieurs)
-           - 📋 Bons de livraison (un ou plusieurs)
-        
-        2. **Cliquez sur "🔍 Lancer la comparaison"**
-        
-        3. **Consultez les résultats** :
-           - Détails par commande
-           - Rapport Excel téléchargeable
-           - Statistiques et KPIs
-        """)
-    
-    with st.expander("📊 Comprendre les résultats"):
-        st.markdown("""
-        ### Codes couleur :
-        - 🟢 **OK** : Quantité commandée = Quantité livrée
-        - 🟡 **QTY_DIFF** : Différence de quantité
-        - 🔴 **MISSING_IN_BL** : Article non trouvé dans le BL
-        
-        ### KPIs :
-        - **Taux de service** : (Qté livrée / Qté commandée) × 100
-        - **Total manquant** : Somme des articles non livrés
-        """)
-    
-    with st.expander("⚙️ Options avancées"):
-        st.markdown("""
-        ### Masquer les commandes sans correspondance
-        Exclut de l'export Excel les commandes qui n'ont pas de BL correspondant.
-        
-        ### Historique
-        Toutes vos comparaisons sont sauvegardées temporairement dans la session.
-        """)
-    
-    if st.button("✅ Compris, retour à l'outil", type="primary"):
-        st.session_state.show_help = False
-        st.rerun()
-
 st.markdown("""
-<div style='text-align: center; margin-top: 40px; font-size: 18px; color: #888;'>
+<div style='text-align: center; margin-top: 40px; font-size: 18px; color: #888888;'>
     ⭐⭐⭐⭐⭐<br>
     <strong>Powered by IC - 2025</strong>
 </div>
