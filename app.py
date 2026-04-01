@@ -467,8 +467,8 @@ elif st.session_state.show_help == "guide":
         st.session_state.show_help = False
         st.rerun()
 
-# Contenu principal — affiché seulement si pas en mode aide
-elif launch_button:
+# Lancement analyse — indépendant du bloc show_help
+if launch_button and not st.session_state.show_help:
     if not commande_files or not bl_files:
         st.error("⚠️ Veuillez téléverser des commandes ET des bons de livraison.")
         st.stop()
@@ -799,7 +799,7 @@ if st.session_state.historique and not st.session_state.show_help:
             else:
                 st.info("Aucun produit à afficher.")
 
-elif not st.session_state.show_help and not st.session_state.historique:
+if not st.session_state.show_help and not st.session_state.historique:
     st.info("👆 Téléversez vos fichiers et lancez la comparaison pour commencer")
 
 st.markdown("""
