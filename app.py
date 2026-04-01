@@ -475,7 +475,7 @@ if st.session_state.historique:
                     return "background-color: #f8d7da"
                 return ""
             st.dataframe(
-                df.style.applymap(color_status, subset=["status"]),
+                df.style.map(color_status, subset=["status"]),
                 use_container_width=True,
                 height=400
             )
